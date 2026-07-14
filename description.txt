@@ -1,0 +1,9 @@
+This mod is primarily intended for Japanese input. If you do not use Japanese or another IME-based input method, this mod may not provide any noticeable benefit.
+
+Japanese input commonly uses full-width characters. In Terraria's search bars, Japanese text cannot normally be entered correctly—the characters disappear while typing, although they may reappear after you press Enter to confirm the input.
+
+This issue may also affect other languages that use IME input or full-width characters, although I have not tested them.
+
+Since I am Japanese, this mod has primarily been developed and tested for Japanese users. It allows supported search bars to properly accept and display Japanese text while it is being entered.
+
+This mod fixes the issue where Japanese text could not be entered correctly into the Recipe Browser search bar.

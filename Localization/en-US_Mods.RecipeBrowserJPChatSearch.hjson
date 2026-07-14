@@ -1,0 +1,9 @@
+# Filename prefixes Keys with Mods.RecipeBrowserJPChatSearch — do not nest Mods again.
+# SearchChordModifier = middle-click search (Inventory ↔ Recipe Browser ↔ Magic Storage)
+# PastLogModifier = browse past chat log without opening chat input
+DisplayName: RBJ Japanese Input Helper
+
+Keybinds: {
+	SearchChordModifier.DisplayName: RBJ Icon Search
+	PastLogModifier.DisplayName: RBJ Past Chat Log
+}

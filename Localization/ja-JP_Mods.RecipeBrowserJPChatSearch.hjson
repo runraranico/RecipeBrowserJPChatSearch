@@ -1,0 +1,14 @@
+# ファイル名が ja-JP_Mods.RecipeBrowserJPChatSearch.hjson のため、
+# キーは自動で Mods.RecipeBrowserJPChatSearch. が付く。内側に Mods を書かない。
+# SearchChordModifier = インベントリ⇔RB⇔MS の中クリ検索
+# PastLogModifier = チャットを開かず過去ログ閲覧
+DisplayName: RBJ 日本語入力補助
+
+Keybinds: {
+	SearchChordModifier: {
+		DisplayName: RBJ アイコンサーチ
+	}
+	PastLogModifier: {
+		DisplayName: RBJ 過去ログ
+	}
+}

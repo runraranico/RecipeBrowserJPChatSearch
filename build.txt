@@ -1,0 +1,10 @@
+displayName = RBJ 日本語入力補助
+author = runohito
+version = 2.1.1
+hideCode = false
+hideResources = false
+includeSource = true
+buildIgnore = 除外\*, *.csproj, *.user, obj\*, bin\*, .vs\*
+modReferences = RecipeBrowser
+side = Client
+description = Recipe Browser 日本語入力補助
