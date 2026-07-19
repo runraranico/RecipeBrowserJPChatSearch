@@ -30,12 +30,8 @@ namespace RecipeBrowserJPChatSearch
 				return;
 
 			ChatBrowseHelper.PostUpdateSyncScroll();
-			if (!Main.drawingPlayerChat)
-			{
-				WorldPlacedItemHover.TickSticky();
-			}
-
 			RecipeBrowserCursorSearchBridge.TickRememberedHoveredItem();
+			MagicStorageSearchHelper.TickCraftResetHookRetry();
 		}
 
 		public override void ModifyInterfaceLayers(List<GameInterfaceLayer> layers)
@@ -144,6 +140,8 @@ namespace RecipeBrowserJPChatSearch
 			WorldPlacedItemHover.CaptureFrameHints();
 
 			RecipeBrowserCursorSearchBridge.TryInitialize();
+
+			MagicStorageCraftingAccessHelper.TickPendingSearch();
 
 			ChatBrowseHelper.DrawHistoryOverlay();
 

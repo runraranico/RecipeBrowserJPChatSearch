@@ -8,6 +8,8 @@ namespace RecipeBrowserJPChatSearch
 		public override void Load()
 		{
 			RbjDiag.BeginSession($"Load start version={Version} verbose={RbjDiag.Enabled}");
+			RbjDiagPolicy.ResetSessionCounters();
+			RbjDiagPolicy.LogPolicyFingerprint();
 
 			ModKeybinds.Register(this);
 
@@ -20,7 +22,6 @@ namespace RecipeBrowserJPChatSearch
 			VanillaItemTagHandlerPatch.Apply();
 			ChatComposeTagShortener.Apply();
 			ChatParseMessageCache.Apply();
-			// ChatItemStackNormalizePatch parked — keep file; conflicts with short /s tags.
 
 			ModLoader.TryGetMod("SerousCommonLib", out Mod serous);
 			if (serous != null)
@@ -64,12 +65,19 @@ namespace RecipeBrowserJPChatSearch
 			ModKeybinds.EnsureDefaultBindingsApplied();
 			RbjRenderHealth.LogStartupConflicts();
 			ModKeybinds.LogAssignedBindingsRelease();
+			// First attempt; TickCraftResetHookRetry sparsely retries if UI/panel not ready yet.
+			MagicStorageSearchHelper.TryHookCraftPanelResetClearSearch();
+			MagicStorageSearchHelper.ArmCraftResetHookRetryIfNeeded();
 		}
 
 		public override void Unload()
 		{
+			RbjDiagPolicy.LogSessionSummary("Unload");
 			MiddleClickTransferPatch.Unload();
 			MagicStorageSearchHelper.Unload();
+			MagicStorageCraftingAccessHelper.Unload();
+			WorldPlacedItemHover.ClearReflectionCache();
+			SerousCommonLibPatches.Unload();
 			RecipeBrowserCursorSearchBridge.Unload();
 			ModKeybinds.Unload();
 		}

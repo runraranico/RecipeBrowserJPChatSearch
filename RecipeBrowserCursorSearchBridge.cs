@@ -103,6 +103,12 @@ namespace RecipeBrowserJPChatSearch
 		/// <summary>Hardware middle button (ignores Terraria / AdvancedKeybinds remaps of Main.mouseMiddle).</summary>
 		internal static bool PreviousPhysicalMiddle { get; private set; }
 
+		private static uint _rbUnderMouseCacheFrame = uint.MaxValue;
+		private static int _rbUnderMouseCacheX = int.MinValue;
+		private static int _rbUnderMouseCacheY = int.MinValue;
+		private static bool _rbUnderMouseCacheHit;
+		private static UIElement _rbUnderMouseCacheElement;
+
 		/// <summary>
 		/// Search hotkey just pressed (default Mouse3 → hardware middle, ignores MOUSE3 remaps).
 		/// </summary>
@@ -127,6 +133,9 @@ namespace RecipeBrowserJPChatSearch
 			_favoritePanelField = null;
 			_lastHoveredItemType = 0;
 			_itemFieldCache.Clear();
+			_rbUnderMouseCacheFrame = uint.MaxValue;
+			_rbUnderMouseCacheHit = false;
+			_rbUnderMouseCacheElement = null;
 		}
 
 		internal static bool IsPhysicalMiddleDown()
@@ -464,8 +473,10 @@ namespace RecipeBrowserJPChatSearch
 		/// Search hotkey (default: physical middle-click):
 		/// 1) inventory / shop / chest / bank slots
 		/// 2) any Main.HoverItem icon (chat tags, tooltips, etc.)
-		/// 3) placed Item Frame / Weapon Rack / Food Platter
-		/// 4) NPC under cursor → open Bestiary and select that NPC
+		/// 3) NPC: only while Recipe Browser is open —
+		///    C = bestiary UINPCSlot; B = SmartInteract / talkNPC;
+		///    enemy = tip + name-hover (ShowNameOnHover). Closed RB → no world NPC (A).
+		/// 4) placed Item Frame / Weapon Rack / Food Platter / placeables
 		/// Magic Storage item slots are owned by MS↔RB transfer when that path consumes the hotkey.
 		/// </summary>
 		internal static bool TryHandleHoverItemMiddleClickQuery()
@@ -490,7 +501,11 @@ namespace RecipeBrowserJPChatSearch
 			bool overMs = MagicStorageSearchHelper.IsMouseOverItemSlot();
 			int hoverType = hoverSnap?.type
 				?? (Main.HoverItem.IsAir ? 0 : Main.HoverItem.type);
-			bool hasNpc = NpcHoverTrack.TryGetHoveredNpc(out int npcType, out int npcNetId);
+			bool rbOpen = GetShowRecipeBrowser();
+			// NPC tip SetZoom is deferred until after UI/HoverItem paths fail (see below).
+			int npcType = 0;
+			int npcNetId = 0;
+			bool hasNpc = false;
 
 			KeyboardState kb = Keyboard.GetState();
 			RbjDiag.Info(
@@ -498,10 +513,10 @@ namespace RecipeBrowserJPChatSearch
 				$"playerInv={Main.playerInventory} npcShop={Main.npcShop} chest={Main.LocalPlayer?.chest} " +
 				$"source={source} context={context} slot={slotIndex} " +
 				$"slotHover={slotHover} slotType={slotType} hoverType={hoverType} " +
-				$"npcHover={hasNpc} npcType={npcType} " +
+				$"rbOpen={rbOpen} " +
 				$"overRbPanel={overRbPanel} overRbItem={overRbItem} overMs={overMs} hoverAir={hoverSnap == null} " +
 				$"chatOpen={Main.drawingPlayerChat} " +
-				$"{RbjDiag.PointerSnapshot()} " +
+				$"{RbjDiagPolicy.MouseTriple()} " +
 				$"mods LCtrl={kb.IsKeyDown(Keys.LeftControl)} RCtrl={kb.IsKeyDown(Keys.RightControl)} " +
 				$"LAlt={kb.IsKeyDown(Keys.LeftAlt)} RAlt={kb.IsKeyDown(Keys.RightAlt)} " +
 				$"LShift={kb.IsKeyDown(Keys.LeftShift)} RShift={kb.IsKeyDown(Keys.RightShift)} " +
@@ -568,13 +583,13 @@ namespace RecipeBrowserJPChatSearch
 
 				RbjDiag.Info(
 					$"Hover search-hotkey accepted source={source} type={slotType} " +
-					$"sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack} → Recipe Browser");
+					$"sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack} → Recipe Browser (sync tabs)");
 				SearchHotkeyProbe.LogBlock(
 					"hover-ok",
 					overRbPanel
 						? $"inv-over-rb-priority source={source} type={slotType} sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack}"
 						: $"inv source={source} type={slotType} sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack}");
-				PerformHoveredItemQuery(slotType, allowToggleClose: false);
+				PerformInvMsSyncedQuery(slotType);
 				return true;
 			}
 
@@ -602,9 +617,9 @@ namespace RecipeBrowserJPChatSearch
 				// treat HoverItem as inv→RB (was wrongly RB→MS via HoverItem-snap-on-rb).
 				int type = hoverSnap.type;
 				RbjDiag.Info(
-					$"Hover search-hotkey accepted source=inv-under-rb-panel type={type} → Recipe Browser");
+					$"Hover search-hotkey accepted source=inv-under-rb-panel type={type} → Recipe Browser (sync tabs)");
 				SearchHotkeyProbe.LogBlock("hover-ok", $"inv-under-rb-panel type={type}");
-				PerformHoveredItemQuery(type, allowToggleClose: false);
+				PerformInvMsSyncedQuery(type);
 				return true;
 			}
 
@@ -614,9 +629,9 @@ namespace RecipeBrowserJPChatSearch
 				if (hoverSnap != null)
 				{
 					int type = hoverSnap.type;
-					RbjDiag.Info($"Hover search-hotkey accepted source=msHoverItemFallback type={type} → Recipe Browser");
+					RbjDiag.Info($"Hover search-hotkey accepted source=msHoverItemFallback type={type} → Recipe Browser (sync tabs)");
 					SearchHotkeyProbe.LogBlock("hover-ok", $"msHoverItemFallback type={type}");
-					PerformHoveredItemQuery(type, allowToggleClose: false);
+					PerformInvMsSyncedQuery(type);
 					return true;
 				}
 
@@ -626,9 +641,9 @@ namespace RecipeBrowserJPChatSearch
 				{
 					RbjDiag.Info(
 						$"Hover search-hotkey accepted source=msZoneFallback how={zoneHow} " +
-						$"type={zoneItem.type} → Recipe Browser");
+						$"type={zoneItem.type} → Recipe Browser (sync tabs)");
 					SearchHotkeyProbe.LogBlock("hover-ok", $"msZoneFallback type={zoneItem.type}");
-					PerformHoveredItemQuery(zoneItem.type, allowToggleClose: false);
+					PerformInvMsSyncedQuery(zoneItem.type);
 					return true;
 				}
 
@@ -651,25 +666,41 @@ namespace RecipeBrowserJPChatSearch
 				return true;
 			}
 
+			// Policy A+B+enemy: world NPC only while RB is open.
+			// Tip SetZoom only here — after UI / HoverItem paths already failed.
+			if (rbOpen)
+			{
+				hasNpc = NpcHoverTrack.TryGetNpcWhileRecipeBrowserOpen(out npcType, out npcNetId);
+			}
+
+			if (rbOpen && hasNpc && npcType > 0)
+			{
+				RbjDiag.Info(
+					$"Hover search-hotkey accepted source=npc-rb-open type={npcType} netId={npcNetId} " +
+					$"→ Bestiary");
+				SearchHotkeyProbe.LogBlock("hover-ok", $"npc-rb-open type={npcType}");
+				HoverTooltipSuppress.Cancel("npc-bestiary");
+				return PerformNpcBestiarySearch(npcType, npcNetId);
+			}
+
+			if (!rbOpen && (Main.SmartInteractNPC >= 0 || (Main.LocalPlayer?.talkNPC ?? -1) >= 0))
+			{
+				RbjDiag.Info(
+					"Hover search-hotkey skipped: world NPC focus ignored while RB closed (policy A)");
+			}
+
 			// Placed tiles — never while a UI owns the mouse (RB query slot etc.)
+			// No sticky HoverHold: wrong world picks must not glue tooltips for 700ms.
 			if (!mouseOnUi
 				&& WorldPlacedItemHover.TryGetItemUnderMouse(out int placedType, out string placedSource)
 				&& placedType > 0)
 			{
 				RbjDiag.Info(
 					$"Hover search-hotkey accepted source={placedSource} type={placedType} " +
-					$"(under-cursor policy) → Recipe Browser");
+					$"(under-cursor policy, no HoverHold) → Recipe Browser");
 				SearchHotkeyProbe.LogBlock("hover-ok", $"{placedSource} type={placedType}");
-				PerformHoveredItemQuery(placedType, allowToggleClose: false);
+				PerformHoveredItemQuery(placedType, allowToggleClose: false, stickyTooltip: false);
 				return true;
-			}
-
-			// NPC under cursor → Bestiary selection (query item slot cannot hold NPCs)
-			if (hasNpc && npcType > 0)
-			{
-				RbjDiag.Info($"Hover search-hotkey accepted source=npc type={npcType} netId={npcNetId} → Bestiary");
-				SearchHotkeyProbe.LogBlock("hover-ok", $"npc type={npcType}");
-				return PerformNpcBestiarySearch(npcType, npcNetId);
 			}
 
 			RbjDiag.Info(
@@ -1208,18 +1239,13 @@ namespace RecipeBrowserJPChatSearch
 		private static bool IsUiItemSlotInParentChain(UIElement under)
 		{
 			TryInitialize();
-			if (_recipeBrowserMod == null)
-				return false;
-
-			Type rbSlot = _recipeBrowserMod.Code.GetType("RecipeBrowser.UIElements.UIItemSlot")
-				?? _recipeBrowserMod.Code.GetType("RecipeBrowser.UIItemSlot");
-			if (rbSlot == null)
+			if (_rbItemSlotType == null)
 				return false;
 
 			UIElement cur = under;
 			while (cur != null)
 			{
-				if (rbSlot.IsInstanceOfType(cur))
+				if (_rbItemSlotType.IsInstanceOfType(cur))
 					return true;
 				cur = cur.Parent;
 			}
@@ -1229,35 +1255,52 @@ namespace RecipeBrowserJPChatSearch
 
 		/// <summary>
 		/// Deepest Recipe Browser UI element under the cursor (main or favorite panel tree).
+		/// Same-frame results are memoized for identical mouse coords (hotkey path may query twice).
 		/// </summary>
 		internal static bool TryGetRecipeBrowserPanelUnderMouse(out UIElement under)
 		{
 			under = null;
+			uint frame = Main.GameUpdateCount;
+			int mx = Main.mouseX;
+			int my = Main.mouseY;
+			if (_rbUnderMouseCacheFrame == frame
+				&& _rbUnderMouseCacheX == mx
+				&& _rbUnderMouseCacheY == my)
+			{
+				under = _rbUnderMouseCacheElement;
+				return _rbUnderMouseCacheHit;
+			}
+
 			TryInitialize();
 			object recipeBrowserUi = _recipeBrowserUiInstanceField?.GetValue(null);
-			if (recipeBrowserUi == null)
-				return false;
-
-			Microsoft.Xna.Framework.Vector2 mouse = new(Main.mouseX, Main.mouseY);
-
-			if (GetShowRecipeBrowser()
-				&& _mainPanelField?.GetValue(recipeBrowserUi) is UIElement mainPanel
-				&& mainPanel.Parent != null
-				&& mainPanel.ContainsPoint(mouse))
+			bool hit = false;
+			if (recipeBrowserUi != null)
 			{
-				under = mainPanel.GetElementAt(mouse) ?? mainPanel;
-				return true;
+				Microsoft.Xna.Framework.Vector2 mouse = new(mx, my);
+
+				if (GetShowRecipeBrowser()
+					&& _mainPanelField?.GetValue(recipeBrowserUi) is UIElement mainPanel
+					&& mainPanel.Parent != null
+					&& mainPanel.ContainsPoint(mouse))
+				{
+					under = mainPanel.GetElementAt(mouse) ?? mainPanel;
+					hit = true;
+				}
+				else if (_favoritePanelField?.GetValue(recipeBrowserUi) is UIElement favoritePanel
+					&& favoritePanel.Parent != null
+					&& favoritePanel.ContainsPoint(mouse))
+				{
+					under = favoritePanel.GetElementAt(mouse) ?? favoritePanel;
+					hit = true;
+				}
 			}
 
-			if (_favoritePanelField?.GetValue(recipeBrowserUi) is UIElement favoritePanel
-				&& favoritePanel.Parent != null
-				&& favoritePanel.ContainsPoint(mouse))
-			{
-				under = favoritePanel.GetElementAt(mouse) ?? favoritePanel;
-				return true;
-			}
-
-			return false;
+			_rbUnderMouseCacheFrame = frame;
+			_rbUnderMouseCacheX = mx;
+			_rbUnderMouseCacheY = my;
+			_rbUnderMouseCacheHit = hit;
+			_rbUnderMouseCacheElement = under;
+			return hit;
 		}
 
 		private static bool TryEnsureFilterFields()
@@ -1313,7 +1356,100 @@ namespace RecipeBrowserJPChatSearch
 			_recipeUpdateNeededField.SetValue(recipeCatalogue, true);
 		}
 
-		internal static void PerformHoveredItemQuery(int? itemTypeOverride = null, bool allowToggleClose = true)
+		/// <summary>
+		/// Inventory / Magic Storage → Recipe Browser:
+		/// always show Recipe tab query, and also fill Craft query + Item-tab name search.
+		/// </summary>
+		internal static void PerformInvMsSyncedQuery(int itemType, bool stickyTooltip = true)
+		{
+			TryInitialize();
+			if (!IsReady)
+			{
+				RbjDiag.Warn("PerformInvMsSyncedQuery aborted: bridge not ready");
+				return;
+			}
+
+			if (itemType <= 0)
+			{
+				RbjDiag.Warn("PerformInvMsSyncedQuery aborted: invalid item type");
+				return;
+			}
+
+			Item tipSnap = Main.HoverItem != null && !Main.HoverItem.IsAir && Main.HoverItem.type == itemType
+				? Main.HoverItem.Clone()
+				: null;
+
+			MarkPendingCursorQueryClear();
+			ClearAllSearchFilters();
+
+			try
+			{
+				object recipeBrowserUi = _recipeBrowserUiInstanceField.GetValue(null);
+				if (recipeBrowserUi == null)
+				{
+					RbjDiag.Warn("PerformInvMsSyncedQuery aborted: RecipeBrowserUI.instance null");
+					return;
+				}
+
+				ShowRecipeBrowser();
+				if (!TrySetCurrentPanel(0))
+					RbjDiag.Warn("PerformInvMsSyncedQuery: SetPanel(Recipe) failed — continuing");
+
+				HandleRecipeCatalogueQuery(itemType, allowToggleClose: false);
+				HandleCraftQuery(itemType, allowToggleClose: false);
+
+				Item probe = tipSnap;
+				if (probe == null)
+				{
+					probe = new Item();
+					probe.SetDefaults(itemType);
+				}
+
+				string name = RecipeBrowserNameSearchHelper.GetSearchName(probe);
+				bool nameOk = RecipeBrowserNameSearchHelper.TrySetNameSearchOnItemTabFromItem(probe);
+
+				int recipeAfter = GetQueryItem(_recipeQueryItemField?.GetValue(_recipeCatalogueInstanceField?.GetValue(null)))?.type ?? 0;
+				int craftAfter = GetSlotItem(_craftRecipeResultSlotField?.GetValue(_craftInstanceField?.GetValue(null)))?.type ?? 0;
+				bool ok = recipeAfter == itemType;
+
+				RbjDiag.Info(
+					$"PerformInvMsSyncedQuery end type={itemType} name='{name}' nameOk={nameOk} " +
+					$"recipe={recipeAfter} craft={craftAfter} ok={ok}");
+
+				if (ok)
+				{
+					Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuTick);
+
+					if (stickyTooltip)
+					{
+						Item tip = tipSnap ?? probe;
+						HoverTooltipSuppress.Hold(tip, reason: $"inv/ms→RB sync type={itemType}");
+					}
+				}
+				else
+				{
+					RbjDiag.Warn(
+						$"PerformInvMsSyncedQuery MISMATCH recipe={recipeAfter} expected={itemType}");
+				}
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Error("PerformInvMsSyncedQuery crashed", ex);
+			}
+			finally
+			{
+				ResetPendingCursorQueryClear();
+			}
+		}
+
+		/// <param name="stickyTooltip">
+		/// When false, skip HoverHold (world placeables / dubious tips must not pin wrong tooltips).
+		/// UI slot / MS / RB transfers keep sticky tips.
+		/// </param>
+		internal static void PerformHoveredItemQuery(
+			int? itemTypeOverride = null,
+			bool allowToggleClose = true,
+			bool stickyTooltip = true)
 		{
 			TryInitialize();
 			if (!IsReady)
@@ -1419,14 +1555,23 @@ namespace RecipeBrowserJPChatSearch
 				{
 					Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuTick);
 
-					Item tip = tipSnap;
-					if (tip == null)
+					if (stickyTooltip)
 					{
-						tip = new Item();
-						tip.SetDefaults(hoveredType);
-					}
+						Item tip = tipSnap;
+						if (tip == null)
+						{
+							tip = new Item();
+							tip.SetDefaults(hoveredType);
+						}
 
-					HoverTooltipSuppress.Hold(tip, reason: $"inv→RB panel={targetPanel} type={hoveredType}");
+						HoverTooltipSuppress.Hold(tip, reason: $"inv→RB panel={targetPanel} type={hoveredType}");
+					}
+					else
+					{
+						RbjDiag.Info(
+							$"HoverHold SKIP type={hoveredType} (stickyTooltip=false world/tip policy)");
+						RbjDiagPolicy.NoteHoverHoldSkip();
+					}
 				}
 			}
 			catch (Exception ex)

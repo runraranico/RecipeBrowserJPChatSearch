@@ -29,7 +29,8 @@ namespace RecipeBrowserJPChatSearch
 			// Keep RegisterKeybind names stable (Controls profile / localization keys).
 			SearchHotkey = KeybindLoader.RegisterKeybind(mod, "SearchChordModifier", SearchDefaultKey);
 			PastLogHotkey = KeybindLoader.RegisterKeybind(mod, "PastLogModifier", PastLogDefaultKey);
-			RbjDiag.Info($"ModKeybinds registered (search={SearchDefaultKey}, pastLog={PastLogDefaultKey})");
+			RbjDiag.Info(
+				$"ModKeybinds registered (search={SearchDefaultKey}, pastLog={PastLogDefaultKey})");
 		}
 
 		/// <summary>
@@ -83,6 +84,9 @@ namespace RecipeBrowserJPChatSearch
 			}
 		}
 
+		internal static string DescribeSearchHotkeyForLog()
+			=> DescribeAssigned(SearchHotkey) ?? "(unbound)";
+
 		private static string DescribeAssigned(ModKeybind keybind)
 		{
 			if (keybind == null)
@@ -135,14 +139,13 @@ namespace RecipeBrowserJPChatSearch
 
 		private static int _fireLatchFrame = -1;
 		private static bool _fireLatchResult;
-		private static long _lastFireTick;
 
 		/// <summary>
 		/// True when the Controls-bound search hotkey should fire this frame.
 		/// Default binding is Mouse3 (hardware middle). Remapped keys use ModKeybind.JustPressed.
 		/// <para>
-		/// Also re-fires every ~180ms while held so incomplete middle-button release / mash
-		/// at the same spot still sends Inv↔RB↔MS (JustPressed alone felt like total failure).
+		/// Edge only — no hold-repeat. Repeating every ~180ms while held caused tip SetZoom
+		/// (npcNamedTip / worldPick / Snapshot) every tick and made vanilla cursorItemIcon flicker.
 		/// Result is latched per <see cref="Main.GameUpdateCount"/> so multiple calls in one
 		/// frame (layer mute checks + PostDraw) agree.
 		/// </para>
@@ -156,11 +159,10 @@ namespace RecipeBrowserJPChatSearch
 			if (_fireLatchFrame == frame)
 				return _fireLatchResult;
 
-			bool down;
 			bool edge;
 			if (IsMouse3OnlyBinding(SearchHotkey))
 			{
-				down = IsPhysicalMiddleDown();
+				bool down = IsPhysicalMiddleDown();
 				edge = down && !RecipeBrowserCursorSearchBridge.PreviousPhysicalMiddle;
 				// Fallback: Main.mouseMiddle edge when hardware / remap disagree.
 				if (!edge && Main.mouseMiddle && !RecipeBrowserCursorSearchBridge.PreviousMouseMiddle)
@@ -168,26 +170,14 @@ namespace RecipeBrowserJPChatSearch
 			}
 			else
 			{
-				down = SearchHotkey.Current;
 				edge = SearchHotkey.JustPressed;
 			}
 
-			const int repeatMs = 180;
-			long now = Environment.TickCount64;
-			bool repeat = down && _lastFireTick > 0 && (now - _lastFireTick) >= repeatMs;
-
-			_fireLatchResult = edge || repeat;
+			_fireLatchResult = edge;
 			_fireLatchFrame = frame;
 
 			if (_fireLatchResult)
-			{
-				_lastFireTick = now;
-				RbjDiag.Info($"SearchHotkeyFire edge={edge} repeat={repeat} down={down}");
-			}
-			else if (!down)
-			{
-				_lastFireTick = 0;
-			}
+				RbjDiag.Info("SearchHotkeyFire edge=True");
 
 			return _fireLatchResult;
 		}

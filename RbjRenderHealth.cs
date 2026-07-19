@@ -180,6 +180,12 @@ namespace RecipeBrowserJPChatSearch
 				}
 			}
 
+			// After CaptureFrameHints: icon + tip remap same frame ⇒ flicker suspect.
+			RbjDiagPolicy.ObserveIconVsTipRemap(
+				WorldPlacedItemHover.FrameIconEnabled,
+				WorldPlacedItemHover.FrameIconId,
+				ZoomRemapsThisFrame);
+
 			string snapText = Snapshot(path);
 			bool badZoom = snapText.Contains("BAD_ZOOM");
 			// Steady ZOOM_MISMATCH with BetterZoom is normal at extreme zoom — not a black-screen signal alone.
@@ -244,18 +250,28 @@ namespace RecipeBrowserJPChatSearch
 			bool chatImprover = ModLoader.HasMod("ChatImprover");
 			bool magicStorage = ModLoader.HasMod("MagicStorage");
 			bool recipeBrowser = ModLoader.HasMod("RecipeBrowser");
+			int realW = Terraria.GameInput.PlayerInput.RealScreenWidth;
+			int realH = Terraria.GameInput.PlayerInput.RealScreenHeight;
+			string dual = (realW != Main.screenWidth || realH != Main.screenHeight) ? " DUAL_SCREEN" : "";
 			RbjDiag.Release(
 				$"Session fingerprint BetterZoom={betterZoom} MagicStorage={magicStorage} " +
 				$"RecipeBrowser={recipeBrowser} ExternalLocalizer/MachineTranslate={localizer} " +
-				$"ChatImprover={chatImprover} verbose={RbjDiag.Enabled} " +
-				$"win={Main.screenWidth}x{Main.screenHeight} uiScale={Main.UIScale:0.###}");
+				$"ChatImprover={chatImprover} NativeCursor={ModLoader.HasMod("NativeCursor")} " +
+				$"verbose={RbjDiag.Enabled} diagBuild={RbjDiagPolicy.DiagBuild} " +
+				$"win={Main.screenWidth}x{Main.screenHeight} real={realW}x{realH}{dual} " +
+				$"uiScale={Main.UIScale:0.###}");
+			RbjDiagPolicy.LogPolicyFingerprint();
 			RbjDiag.Info(
-				"RbjRenderHealth black-screen breadcrumb: search BlackTrail / ZOOM_MISMATCH / ZOOM/MOUSE LEAK / " +
-				"ZOOM_DEPTH_LEAK / ZOOM_REMAP_SPAM / EVENT in RBJ_Debug_latest.txt");
+				"RbjRenderHealth breadcrumb: BlackTrail / ZOOM_MISMATCH / SIZE_DELTA / DUAL_SCREEN / " +
+				"NpcHover REJECT / F-fallback REJECT / RBJ_MARK");
+			RbjDiag.Info(
+				"Mark broken moments: chat /rbjmark broken-ui. " +
+				"World pick = cursorItemIcon only (no tip/SetZoom/F). " +
+				"NPC = PreHover/smart/talk while RB open. Inv/MS sync Recipe+Craft+ItemName.");
 			if (betterZoom)
 			{
 				RbjDiag.Warn(
-					"BetterZoom detected. Extreme zoom can black/mis-pick tiles vs UI tip. " +
+					"BetterZoom detected. Extreme zoom can mis-pick tiles vs UI tip. " +
 					"Prefer vanilla-range zoom for consistent Workshop behavior.");
 			}
 		}

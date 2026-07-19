@@ -13,9 +13,7 @@ namespace RecipeBrowserJPChatSearch
 		private static bool _fieldsCached;
 
 		/// <summary>
-		/// MS middle-click:
-		/// panel 0/1 → query slot; panel 2 (Item) → name-search only;
-		/// panel 3 (Bestiary) → switch to Recipe catalogue query (same as inventory middle-click).
+		/// MS middle-click → Recipe tab (shown) + Craft query + Item-tab name search.
 		/// </summary>
 		internal static bool TryTransferFromMagicStorage(Item item)
 		{
@@ -35,21 +33,10 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 			}
 
-			RecipeBrowserCursorSearchBridge.ShowRecipeBrowser();
-
-			if (currentPanel == 2)
-			{
-				string name = GetSearchName(item);
-				if (string.IsNullOrWhiteSpace(name))
-					return false;
-
-				bool ok = TrySetNameSearchOnItemTab(name);
-				RbjDiag.Info($"MS→RB Item-tab name search ok={ok} name='{name}'");
-				return ok;
-			}
-
-			RecipeBrowserCursorSearchBridge.PerformHoveredItemQuery(item.type, allowToggleClose: false);
-			RbjDiag.Info($"MS→RB query slot panel={currentPanel} type={item.type}");
+			RecipeBrowserCursorSearchBridge.PerformInvMsSyncedQuery(item.type);
+			RbjDiag.Info(
+				$"MS→RB synced query type={item.type} fromPanel={currentPanel} " +
+				$"name='{GetSearchName(item)}'");
 			return true;
 		}
 

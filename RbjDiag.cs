@@ -19,8 +19,8 @@ namespace RecipeBrowserJPChatSearch
 	internal static class RbjDiag
 	{
 		/// <summary>
-		/// Verbose Info logs. Keep true while debugging; set false before Workshop publish.
-		/// Warn / Error / Release (startup fingerprint etc.) are NOT gated by this.
+		/// Verbose Info logs. Default false for Workshop / public builds.
+		/// Set true temporarily while debugging. Warn / Error / Release are NOT gated by this.
 		/// </summary>
 		internal static bool Enabled = false;
 
@@ -29,7 +29,9 @@ namespace RecipeBrowserJPChatSearch
 		private static bool _pathsReady;
 		private const int MaxLatestBytes = 512 * 1024;
 
-		/// <summary>Verbose development Info (no-op when <see cref="Enabled"/> is false).</summary>
+		/// <summary>
+		/// Verbose development Info (no-op when <see cref="Enabled"/> is false).
+		/// </summary>
 		internal static void Info(string message)
 		{
 			if (!Enabled)

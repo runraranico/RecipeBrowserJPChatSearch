@@ -3,6 +3,7 @@ using System.Reflection;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.Audio;
+using Terraria.GameInput;
 using Terraria.ID;
 using Terraria.ModLoader;
 using Terraria.UI;
@@ -10,10 +11,12 @@ using Terraria.UI;
 namespace RecipeBrowserJPChatSearch.Patches
 {
 	/// <summary>
-	/// Search-hotkey transfer (default: physical middle-click):
+	/// Search-hotkey transfer (Controls-bound key, JustPressed only):
 	/// - Magic Storage item → Recipe Browser (query / item-tab name)
 	/// - Recipe Browser item → Magic Storage search bar
-	/// Mouse3 binding uses the hardware middle button (not remapped Main.mouseMiddle).
+	///   · Storage UI open → keep it, set storage search
+	///   · Crafting UI open → keep it, set crafting search
+	///   · None open → open nearest reachable Crafting Access only, then set search
 	/// </summary>
 	internal static class MiddleClickTransferPatch
 	{
@@ -77,6 +80,12 @@ namespace RecipeBrowserJPChatSearch.Patches
 				return false;
 			}
 
+			if (Main.drawingPlayerChat || PlayerInput.WritingText)
+			{
+				SearchHotkeyProbe.LogBlock("transfer-skip", "chatOrWritingText");
+				return false;
+			}
+
 			if (RecipeBrowserInputHelper.ActiveRecipeBrowserTextBox != null)
 			{
 				SearchHotkeyProbe.LogBlock("transfer-skip", "rbTextBoxFocused");
@@ -99,10 +108,18 @@ namespace RecipeBrowserJPChatSearch.Patches
 				$"overMs={overMs} msOpen={msOpen} hoverAir={hoverSnap == null}");
 
 			// RB→MS only when cursor is on an RB item icon (not panel chrome overlapping inventory).
-			if (overRbItem && msOpen && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow1, out Item rbItem1))
+			if (overRbItem && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow, out Item rbItem))
 			{
-				SearchHotkeyProbe.LogBlock("transfer-ok", $"RB→MS (rb-item) how={rbHow1}");
-				HoverTooltipSuppress.Hold(rbItem1, reason: "RB→MS");
+				if (rbItem != null && !rbItem.IsAir)
+				{
+					SearchHotkeyProbe.LogBlock("transfer-ok", $"RB→MS how={rbHow}");
+					HoverTooltipSuppress.Hold(rbItem, reason: "RB→MS");
+				}
+				else
+				{
+					SearchHotkeyProbe.LogBlock("transfer-ok", $"RB→MS consumed-no-search how={rbHow}");
+				}
+
 				return true;
 			}
 
@@ -110,13 +127,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 			{
 				SearchHotkeyProbe.LogBlock("transfer-ok", $"MS→RB how={msHow}");
 				HoverTooltipSuppress.Hold(msItem, reason: "MS→RB");
-				return true;
-			}
-
-			if (overRbItem && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow2, out Item rbItem2))
-			{
-				SearchHotkeyProbe.LogBlock("transfer-ok", $"RB→MS how={rbHow2}");
-				HoverTooltipSuppress.Hold(rbItem2, reason: "RB→MS");
 				return true;
 			}
 
@@ -150,7 +160,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 				return false;
 			}
 
-			SoundEngine.PlaySound(SoundID.MenuTick);
+			// Sound is played inside PerformInvMsSyncedQuery.
 			transferred = item;
 			return true;
 		}
@@ -162,19 +172,59 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (_rbItemSlotType == null || _rbItemField == null)
 				return false;
 
-			if (!MagicStorageSearchHelper.IsAnyTargetUiOpen())
-				return false;
-
 			if (!TryGetHoveredRecipeBrowserItem(hoverSnap, out Item item, out how) || item.IsAir)
 				return false;
 
+			string itemName = RecipeBrowserNameSearchHelper.GetSearchName(item);
+			MagicStorageUiKind uiKind = MagicStorageCraftingAccessHelper.GetCurrentUiKind();
+			string keyLabel = ModKeybinds.DescribeSearchHotkeyForLog();
+
 			RbjDiag.Info(
-				$"RB→MS search-hotkey how={how} type={item.type} name='{RecipeBrowserNameSearchHelper.GetSearchName(item)}'");
-			if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
+				$"RBTransferKeyPressed key=[{keyLabel}] how={how} itemType={item.type} itemName={itemName} " +
+				$"CurrentUi={MagicStorageCraftingAccessHelper.UiKindLabel(uiKind)}");
+
+			if (uiKind == MagicStorageUiKind.Storage)
 			{
-				RbjDiag.Warn("RB→MS failed to set Magic Storage search");
-				SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→MS type={item.type}");
-				return false;
+				RbjDiag.Info("Action=SetStorageSearch");
+				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
+				{
+					RbjDiag.Info("SetSearchSuccess=false reason=storage-search-fail");
+					SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→StorageSearch type={item.type}");
+					return false;
+				}
+
+				RbjDiag.Info("SetSearchSuccess=true");
+				SoundEngine.PlaySound(SoundID.MenuTick);
+				transferred = item;
+				return true;
+			}
+
+			if (uiKind == MagicStorageUiKind.Crafting)
+			{
+				RbjDiag.Info("Action=SetCraftingSearch");
+				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
+				{
+					RbjDiag.Info("SetSearchSuccess=false reason=crafting-search-fail");
+					SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→CraftingSearch type={item.type}");
+					return false;
+				}
+
+				RbjDiag.Info("SetSearchSuccess=true");
+				SoundEngine.PlaySound(SoundID.MenuTick);
+				transferred = item;
+				return true;
+			}
+
+			// No MS UI open → Crafting Access only (never auto-open Heart / Storage Access / Remote).
+			RbjDiag.Info("Action=OpenNearestCraftingAccessThenSearch");
+			if (!MagicStorageCraftingAccessHelper.TryOpenNearestCraftingAccessAndSetSearch(item, out string failReason))
+			{
+				RbjDiag.Info($"SetSearchSuccess=false reason={failReason}");
+				SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→OpenCraft type={item.type} {failReason}");
+				// Consume the key on a valid RB icon; do not Hold a tip (search did not run).
+				how = failReason;
+				transferred = null;
+				return true;
 			}
 
 			SoundEngine.PlaySound(SoundID.MenuTick);

@@ -7,9 +7,7 @@ namespace RecipeBrowserJPChatSearch
 	{
 		public override bool PreHoverInteract(NPC npc, bool mouseIntersects)
 		{
-			if (mouseIntersects)
-				NpcHoverTrack.Note(npc);
-
+			NpcHoverTrack.Note(npc, mouseIntersects);
 			return true;
 		}
 	}

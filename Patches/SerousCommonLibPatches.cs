@@ -17,6 +17,15 @@ namespace RecipeBrowserJPChatSearch.Patches
 		private static PropertyInfo _stateProperty;
 		private static MethodInfo _getDimensionsMethod;
 
+		private static Type _cachedStateType;
+		private static PropertyInfo _hasFocusProp;
+		private static PropertyInfo _isActiveProp;
+		private static PropertyInfo _hideContentsProp;
+		private static PropertyInfo _hasTextProp;
+		private static PropertyInfo _inputTextProp;
+		private static PropertyInfo _cursorLocationProp;
+		private static bool _statePropsFailed;
+
 		public static void Apply(Mod serousMod)
 		{
 			Type textInputBarType = serousMod.Code.GetType("SerousCommonLib.UI.TextInputBar");
@@ -48,20 +57,81 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (state == null)
 				return;
 
-			Type stateType = state.GetType();
-			bool hasFocus = (bool)stateType.GetProperty("HasFocus").GetValue(state);
-			bool isActive = (bool)stateType.GetProperty("IsActive").GetValue(state);
-			bool hideContents = (bool)stateType.GetProperty("HideContents").GetValue(state);
-
-			if (!hasFocus || !isActive || hideContents)
+			if (!EnsureStateProperties(state.GetType()))
 				return;
 
-			bool hasText = (bool)stateType.GetProperty("HasText").GetValue(state);
-			string committedText = hasText ? (string)stateType.GetProperty("InputText").GetValue(state) : string.Empty;
-			int cursor = (int)stateType.GetProperty("CursorLocation").GetValue(state);
+			try
+			{
+				bool hasFocus = (bool)_hasFocusProp.GetValue(state);
+				bool isActive = (bool)_isActiveProp.GetValue(state);
+				bool hideContents = (bool)_hideContentsProp.GetValue(state);
 
-			var dimensions = (CalculatedStyle)_getDimensionsMethod.Invoke(self, null);
-			ImeCompositionDrawHelper.DrawInBar(spriteBatch, dimensions, committedText, cursor);
+				if (!hasFocus || !isActive || hideContents)
+					return;
+
+				bool hasText = (bool)_hasTextProp.GetValue(state);
+				string committedText = hasText ? (string)_inputTextProp.GetValue(state) : string.Empty;
+				int cursor = (int)_cursorLocationProp.GetValue(state);
+
+				var dimensions = (CalculatedStyle)_getDimensionsMethod.Invoke(self, null);
+				ImeCompositionDrawHelper.DrawInBar(spriteBatch, dimensions, committedText, cursor);
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Error("Serous DrawComposition failed", ex);
+			}
+		}
+
+		private static bool EnsureStateProperties(Type stateType)
+		{
+			if (stateType == null || _statePropsFailed)
+				return false;
+
+			if (_cachedStateType == stateType
+				&& _hasFocusProp != null
+				&& _isActiveProp != null
+				&& _hideContentsProp != null
+				&& _hasTextProp != null
+				&& _inputTextProp != null
+				&& _cursorLocationProp != null)
+				return true;
+
+			const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+			_cachedStateType = stateType;
+			_hasFocusProp = stateType.GetProperty("HasFocus", flags);
+			_isActiveProp = stateType.GetProperty("IsActive", flags);
+			_hideContentsProp = stateType.GetProperty("HideContents", flags);
+			_hasTextProp = stateType.GetProperty("HasText", flags);
+			_inputTextProp = stateType.GetProperty("InputText", flags);
+			_cursorLocationProp = stateType.GetProperty("CursorLocation", flags);
+
+			if (_hasFocusProp == null
+				|| _isActiveProp == null
+				|| _hideContentsProp == null
+				|| _hasTextProp == null
+				|| _inputTextProp == null
+				|| _cursorLocationProp == null)
+			{
+				_statePropsFailed = true;
+				RbjDiag.Warn("Serous TextInputState property cache incomplete");
+				return false;
+			}
+
+			return true;
+		}
+
+		internal static void Unload()
+		{
+			_stateProperty = null;
+			_getDimensionsMethod = null;
+			_cachedStateType = null;
+			_hasFocusProp = null;
+			_isActiveProp = null;
+			_hideContentsProp = null;
+			_hasTextProp = null;
+			_inputTextProp = null;
+			_cursorLocationProp = null;
+			_statePropsFailed = false;
 		}
 	}
 }

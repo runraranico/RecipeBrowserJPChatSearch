@@ -41,14 +41,35 @@ namespace RecipeBrowserJPChatSearch
 			if (item == null || item.IsAir)
 				return;
 
+			// Belt-and-suspenders: never sticky-hold placeable / world-pick reasons.
+			string r = reason ?? string.Empty;
+			if (r.IndexOf("placeable", StringComparison.OrdinalIgnoreCase) >= 0
+				|| r.IndexOf("WorldPick", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				RbjDiag.Info($"HoverHold REJECT reason='{r}' type={item.type}");
+				return;
+			}
+
 			_held = item.Clone();
 			int ms = holdMs > 0 ? holdMs : DefaultHoldMs;
 			_holdUntilTick = Environment.TickCount64 + ms;
-			_armReason = reason ?? string.Empty;
+			_armReason = r;
 			_applyLogged = false;
 			RbjDiag.Info($"HoverHold ARM type={_held.type} ms={ms} reason='{_armReason}'");
 			RbjRenderHealth.Mark($"HoverHold ARM type={_held.type} ms={ms}");
 			HoverTooltipLocationProbe.Arm($"Hold:{_armReason}:type={_held.type}");
+		}
+
+		internal static void Cancel(string why = null)
+		{
+			if (_held == null)
+				return;
+
+			RbjDiag.Info($"HoverHold CANCEL type={_held.type} why='{why ?? ""}' was='{_armReason}'");
+			_held = null;
+			_holdUntilTick = 0;
+			_armReason = string.Empty;
+			_applyLogged = false;
 		}
 
 		/// <summary>
@@ -89,7 +110,7 @@ namespace RecipeBrowserJPChatSearch
 			if (!Active)
 				return;
 
-			Main.HoverItem = _held.Clone();
+			Main.HoverItem = _held;
 			if (!string.IsNullOrEmpty(_held.Name))
 				Main.HoverItem.SetNameOverride(_held.Name);
 

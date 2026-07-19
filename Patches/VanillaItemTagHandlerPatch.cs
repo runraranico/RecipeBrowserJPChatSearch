@@ -18,9 +18,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 		internal static bool OnHoverHooked { get; private set; }
 
-		/// <summary>Always false — UniqueDraw is intentionally not hooked.</summary>
-		internal static bool UniqueDrawHooked => false;
-
 		public static void Apply()
 		{
 			OnHoverHooked = false;
