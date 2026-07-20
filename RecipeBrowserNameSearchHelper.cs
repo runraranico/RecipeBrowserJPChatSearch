@@ -13,7 +13,7 @@ namespace RecipeBrowserJPChatSearch
 		private static bool _fieldsCached;
 
 		/// <summary>
-		/// MS middle-click → Recipe tab (shown) + Craft query + Item-tab name search.
+		/// MS middle-click → Recipe tab (shown) + Item-tab name search (Craft query untouched).
 		/// </summary>
 		internal static bool TryTransferFromMagicStorage(Item item)
 		{

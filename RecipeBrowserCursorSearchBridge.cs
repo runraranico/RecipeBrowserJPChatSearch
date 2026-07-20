@@ -1358,7 +1358,7 @@ namespace RecipeBrowserJPChatSearch
 
 		/// <summary>
 		/// Inventory / Magic Storage → Recipe Browser:
-		/// always show Recipe tab query, and also fill Craft query + Item-tab name search.
+		/// show Recipe tab query + Item-tab name search. Does not touch Craft tab query.
 		/// </summary>
 		internal static void PerformInvMsSyncedQuery(int itemType, bool stickyTooltip = true)
 		{
@@ -1396,7 +1396,6 @@ namespace RecipeBrowserJPChatSearch
 					RbjDiag.Warn("PerformInvMsSyncedQuery: SetPanel(Recipe) failed — continuing");
 
 				HandleRecipeCatalogueQuery(itemType, allowToggleClose: false);
-				HandleCraftQuery(itemType, allowToggleClose: false);
 
 				Item probe = tipSnap;
 				if (probe == null)
@@ -1409,12 +1408,11 @@ namespace RecipeBrowserJPChatSearch
 				bool nameOk = RecipeBrowserNameSearchHelper.TrySetNameSearchOnItemTabFromItem(probe);
 
 				int recipeAfter = GetQueryItem(_recipeQueryItemField?.GetValue(_recipeCatalogueInstanceField?.GetValue(null)))?.type ?? 0;
-				int craftAfter = GetSlotItem(_craftRecipeResultSlotField?.GetValue(_craftInstanceField?.GetValue(null)))?.type ?? 0;
 				bool ok = recipeAfter == itemType;
 
 				RbjDiag.Info(
 					$"PerformInvMsSyncedQuery end type={itemType} name='{name}' nameOk={nameOk} " +
-					$"recipe={recipeAfter} craft={craftAfter} ok={ok}");
+					$"recipe={recipeAfter} ok={ok}");
 
 				if (ok)
 				{

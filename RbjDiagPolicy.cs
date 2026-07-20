@@ -7,8 +7,8 @@ using Terraria.ModLoader;
 namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
-	/// Diagnostics policy / counters / manual marks for log-driven fixes.
-	/// Does not mutate game state except writing logs and chat feedback on mark.
+	/// Diagnostics policy / counters for log-driven fixes.
+	/// Does not mutate game state (logs only).
 	/// </summary>
 	internal static class RbjDiagPolicy
 	{
@@ -19,11 +19,6 @@ namespace RecipeBrowserJPChatSearch
 		internal static int SetZoomSizeDeltaCount;
 		internal static int TipRemapCount;
 		internal static int IconWithRemapFrames;
-
-		private const int MarkCapacity = 24;
-		private static readonly string[] _marks = new string[MarkCapacity];
-		private static int _markWrite;
-		private static int _markCount;
 
 		private static long _nextSizeLogTick;
 		private static long _nextTipRemapLogTick;
@@ -38,9 +33,6 @@ namespace RecipeBrowserJPChatSearch
 			IconWithRemapFrames = 0;
 			WorldPlacedItemHover.WorldPickOkCount = 0;
 			WorldPlacedItemHover.WorldPickMissCount = 0;
-			_markWrite = 0;
-			_markCount = 0;
-			Array.Clear(_marks, 0, _marks.Length);
 			_lastTipRemapReason = string.Empty;
 		}
 
@@ -48,7 +40,7 @@ namespace RecipeBrowserJPChatSearch
 		{
 			RbjDiag.Release(
 				$"DiagPolicy build={DiagBuild} verbose={RbjDiag.Enabled} " +
-				$"npc=A-closed/preHover>smart>talk-when-RBopen(noTip) invMs=syncRecipeCraftItemName " +
+				$"npc=A-closed/preHover>smart>talk-when-RBopen(noTip) invMs=syncRecipeItemName " +
 				$"worldPick=cursorIcon+MouseOverMS(noTip/noF) holdRepeat=OFF " +
 				$"screenSizeForceRestore=OFF setZoomSizeObserve=ON " +
 				$"NativeCursor={ModLoader.HasMod("NativeCursor")} " +
@@ -136,38 +128,6 @@ namespace RecipeBrowserJPChatSearch
 				$"(observe-only; no force restore) count={SetZoomSizeDeltaCount}");
 		}
 
-		internal static void Mark(string tag)
-		{
-			if (string.IsNullOrWhiteSpace(tag))
-				tag = "mark";
-
-			tag = tag.Trim();
-			if (tag.Length > 80)
-				tag = tag.Substring(0, 80);
-
-			string line =
-				$"{DateTime.Now:HH:mm:ss.fff} MARK '{tag}' | {MouseTriple()} | " +
-				$"holdSkip={HoverHoldSkipCount} " +
-				$"sizeDelta={SetZoomSizeDeltaCount} tipRemap={TipRemapCount} iconRemapFr={IconWithRemapFrames}";
-
-			_marks[_markWrite] = line;
-			_markWrite = (_markWrite + 1) % MarkCapacity;
-			if (_markCount < MarkCapacity)
-				_markCount++;
-
-			RbjDiag.Release($"RBJ_MARK {line}");
-			RbjRenderHealth.Mark($"MARK:{tag}");
-
-			try
-			{
-				Main.NewText($"[RBJ] marked '{tag}' → Logs/RBJ_Debug_latest.txt", 120, 220, 255);
-			}
-			catch
-			{
-				// ignore
-			}
-		}
-
 		internal static void LogSessionSummary(string reason)
 		{
 			RbjDiag.Release(
@@ -175,27 +135,7 @@ namespace RecipeBrowserJPChatSearch
 				$"hoverHoldSkip={HoverHoldSkipCount} setZoomSizeDelta={SetZoomSizeDeltaCount} " +
 				$"worldPickOk={WorldPlacedItemHover.WorldPickOkCount} " +
 				$"worldPickMiss={WorldPlacedItemHover.WorldPickMissCount} " +
-				$"tipRemap={TipRemapCount} iconRemapFrames={IconWithRemapFrames} marks={_markCount}");
-		}
-	}
-
-	/// <summary>Chat: /rbjmark [tag] — stamps the log at this moment for screenshot correlation.</summary>
-	public class RbjMarkCommand : ModCommand
-	{
-		public override CommandType Type => CommandType.Chat;
-
-		public override string Command => "rbjmark";
-
-		public override string Usage => "/rbjmark [tag]";
-
-		public override string Description => "Stamp RBJ debug log (e.g. /rbjmark broken-ui)";
-
-		public override void Action(CommandCaller caller, string input, string[] args)
-		{
-			string tag = args != null && args.Length > 0
-				? string.Join(" ", args)
-				: "mark";
-			RbjDiagPolicy.Mark(tag);
+				$"tipRemap={TipRemapCount} iconRemapFrames={IconWithRemapFrames}");
 		}
 	}
 }

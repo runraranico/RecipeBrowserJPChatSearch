@@ -263,11 +263,10 @@ namespace RecipeBrowserJPChatSearch
 			RbjDiagPolicy.LogPolicyFingerprint();
 			RbjDiag.Info(
 				"RbjRenderHealth breadcrumb: BlackTrail / ZOOM_MISMATCH / SIZE_DELTA / DUAL_SCREEN / " +
-				"NpcHover REJECT / F-fallback REJECT / RBJ_MARK");
+				"NpcHover REJECT / F-fallback REJECT");
 			RbjDiag.Info(
-				"Mark broken moments: chat /rbjmark broken-ui. " +
 				"World pick = cursorItemIcon only (no tip/SetZoom/F). " +
-				"NPC = PreHover/smart/talk while RB open. Inv/MS sync Recipe+Craft+ItemName.");
+				"NPC = PreHover/smart/talk while RB open. Inv/MS sync Recipe+ItemName.");
 			if (betterZoom)
 			{
 				RbjDiag.Warn(
