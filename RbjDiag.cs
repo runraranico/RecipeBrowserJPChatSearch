@@ -6,23 +6,28 @@ using Terraria.ModLoader;
 namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
-	/// Diagnostic logging → tModLoader Logger + Documents/.../Logs/RBJ_Debug_*.txt
+	/// Diagnostic logging. Optional disk files under Documents/.../Logs/RBJ_Debug_*.txt.
 	/// <para>
-	/// Two tiers:
+	/// Tiers:
 	/// <list type="bullet">
 	/// <item><see cref="Enabled"/> (verbose): detailed Info spam for development.</item>
-	/// <item>Release: <see cref="Release"/> / Warn / Error always written (Workshop-safe).</item>
+	/// <item><see cref="FileLoggingEnabled"/>: write RBJ_Debug_latest / session txt. Default false for Workshop.</item>
+	/// <item>Warn / Error always go to tModLoader Logger (no RBJ_Debug files when FileLoggingEnabled is false).</item>
 	/// </list>
-	/// Set <see cref="Enabled"/> false before Workshop publish.
 	/// </para>
 	/// </summary>
 	internal static class RbjDiag
 	{
 		/// <summary>
 		/// Verbose Info logs. Default false for Workshop / public builds.
-		/// Set true temporarily while debugging. Warn / Error / Release are NOT gated by this.
 		/// </summary>
 		internal static bool Enabled = false;
+
+		/// <summary>
+		/// When false, never create or append <c>RBJ_Debug_*.txt</c> (Workshop default).
+		/// Set true temporarily while debugging to disk.
+		/// </summary>
+		internal static bool FileLoggingEnabled = false;
 
 		private static string _latestPath;
 		private static string _sessionPath;
@@ -36,22 +41,28 @@ namespace RecipeBrowserJPChatSearch
 		{
 			if (!Enabled)
 				return;
-			Write("INFO", message, forceFile: true);
+			Write("INFO", message);
 		}
 
-		/// <summary>Short always-on Info for Workshop builds (session fingerprint, transfer summary).</summary>
+		/// <summary>
+		/// Short session / transfer summaries. Disk only when <see cref="FileLoggingEnabled"/>;
+		/// tML Logger Info only when <see cref="Enabled"/> (avoids Workshop client.log spam).
+		/// </summary>
 		internal static void Release(string message)
-			=> Write("INFO", message, forceFile: true);
+		{
+			if (!Enabled && !FileLoggingEnabled)
+				return;
+			Write("INFO", message);
+		}
 
 		internal static void Warn(string message)
-			=> Write("WARN", message, forceFile: true);
+			=> Write("WARN", message);
 
 		internal static void Error(string message, Exception ex = null)
 		{
 			Write(
 				"ERROR",
-				ex == null ? message : $"{message} | {ex.GetType().Name}: {ex.Message}",
-				forceFile: true);
+				ex == null ? message : $"{message} | {ex.GetType().Name}: {ex.Message}");
 
 			try
 			{
@@ -69,48 +80,58 @@ namespace RecipeBrowserJPChatSearch
 		internal static string PointerSnapshot()
 			=> RbjCursor.Snapshot();
 
-		/// <summary>Force a new latest/session file (call from Mod.Load).</summary>
+		/// <summary>Call from Mod.Load. Creates disk session files only when FileLoggingEnabled.</summary>
 		internal static void BeginSession(string note = null)
 		{
 			_pathsReady = false;
 			_latestPath = null;
 			_sessionPath = null;
-			EnsurePaths();
+			if (FileLoggingEnabled)
+				EnsurePaths();
 			if (!string.IsNullOrEmpty(note))
 				Release(note);
 		}
 
-		private static void Write(string level, string message, bool forceFile)
+		private static void Write(string level, string message)
 		{
-			if (!forceFile && !Enabled)
+			bool toLogger = level is "WARN" or "ERROR" || Enabled;
+			bool toFile = FileLoggingEnabled;
+
+			if (!toLogger && !toFile)
 				return;
 
 			string line = $"[{DateTime.Now:HH:mm:ss.fff}] [RBJDiag/{level}] {message}";
-			try
+
+			if (toLogger)
 			{
-				var logger = ModContent.GetInstance<RecipeBrowserJPChatSearch>()?.Logger;
-				if (logger != null)
+				try
 				{
-					string payload = $"[RBJDiag] {message}";
-					switch (level)
+					var logger = ModContent.GetInstance<RecipeBrowserJPChatSearch>()?.Logger;
+					if (logger != null)
 					{
-						case "WARN":
-							logger.Warn(payload);
-							break;
-						case "ERROR":
-							logger.Error(payload);
-							break;
-						default:
-							// Release lines still go to tML Info so they appear with Enabled=false.
-							logger.Info(payload);
-							break;
+						string payload = $"[RBJDiag] {message}";
+						switch (level)
+						{
+							case "WARN":
+								logger.Warn(payload);
+								break;
+							case "ERROR":
+								logger.Error(payload);
+								break;
+							default:
+								logger.Info(payload);
+								break;
+						}
 					}
 				}
+				catch
+				{
+					// Logger may be unavailable during unload.
+				}
 			}
-			catch
-			{
-				// Logger may be unavailable during unload.
-			}
+
+			if (!toFile)
+				return;
 
 			try
 			{
@@ -127,7 +148,7 @@ namespace RecipeBrowserJPChatSearch
 
 		private static void EnsurePaths()
 		{
-			if (_pathsReady)
+			if (_pathsReady || !FileLoggingEnabled)
 				return;
 
 			string logsDir = Path.Combine(Main.SavePath, "Logs");
@@ -142,7 +163,7 @@ namespace RecipeBrowserJPChatSearch
 
 		private static void MaybeRotateLatest()
 		{
-			if (_latestPath == null || !File.Exists(_latestPath))
+			if (!FileLoggingEnabled || _latestPath == null || !File.Exists(_latestPath))
 				return;
 
 			try

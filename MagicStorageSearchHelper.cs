@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Terraria;
@@ -11,11 +12,15 @@ namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
 	/// Writes text into the open Magic Storage search bar (crafting station or storage heart).
-	/// On crafting UI, also best-effort switches to Filter All + RecipeAll before searching.
+	/// On crafting UI, also best-effort switches to Filter All + RecipeAll before searching,
+	/// then (after list refresh) selects a recipe like a craft-zone left-click:
+	/// first craftable match, else leftmost match.
 	/// </summary>
 	internal static class MagicStorageSearchHelper
 	{
 		private const string RecipeAllLocalizationKey = "Mods.MagicStorage.RecipeAll";
+		private const int PendingCraftSelectMaxFrames = 90;
+		private const int PendingCraftSelectMinWaitFrames = 2;
 
 		private static bool _resolved;
 		private static bool _failed;
@@ -32,6 +37,26 @@ namespace RecipeBrowserJPChatSearch
 		private static MethodInfo _stateReset;
 		private static MethodInfo _stateUnfocus;
 		private static MethodInfo _setRefresh;
+
+		// CraftingGUI.SetSelectedRecipe — soft; search still works if this fails.
+		private static bool _craftSelectResolved;
+		private static bool _craftSelectFailed;
+		private static MethodInfo _setSelectedRecipe;
+		private static FieldInfo _craftingRecipesField;
+		private static FieldInfo _craftingRecipeAvailableField;
+		private static MethodInfo _isRecipeAvailable;
+		private static PropertyInfo _currentlyRefreshingProperty;
+		private static PropertyInfo _refreshUiProperty;
+		private static FieldInfo _refreshUiField;
+		private static FieldInfo _resultToRecipeField;
+		private static FieldInfo _craftingHistoryField;
+		private static MethodInfo _historyAddHistory;
+
+		private static int _pendingCraftSelectType;
+		private static int _pendingCraftSelectFramesLeft;
+		private static int _pendingCraftSelectMinWaitLeft;
+		/// <summary>RB UIRecipeSlot recipe to prefer (Main.recipe entry); null = type-only fallback.</summary>
+		private static Recipe _pendingPreferredRecipe;
 
 		// Soft filter reflection — failure must never block search.
 		private static bool _filterResolved;
@@ -55,6 +80,25 @@ namespace RecipeBrowserJPChatSearch
 
 			string name = RecipeBrowserNameSearchHelper.GetSearchName(item);
 			return !string.IsNullOrWhiteSpace(name) && TrySetSearch(name);
+		}
+
+		/// <summary>
+		/// Crafting UI: set name search, then after refresh select recipe.
+		/// Priority: preferred RB recipe if craftable → leftmost craftable → leftmost.
+		/// Storage UI: name search only (no recipe select).
+		/// </summary>
+		internal static bool TrySetSearchFromItemAndSelectCraftRecipe(Item item, Recipe preferredRecipe = null)
+		{
+			if (item == null || item.IsAir)
+				return false;
+
+			if (!TrySetSearchFromItem(item))
+				return false;
+
+			if (IsCraftingUiOpen())
+				ArmPendingCraftRecipeSelect(item.type, preferredRecipe);
+
+			return true;
 		}
 
 		internal static bool TrySetSearch(string name)
@@ -109,7 +153,7 @@ namespace RecipeBrowserJPChatSearch
 
 				_stateActivate.Invoke(state, null);
 				_stateSet.Invoke(state, new object[] { name });
-				_setRefresh?.Invoke(null, new object[] { true });
+				RequestStorageRefresh(forceFullRefresh: true);
 				RbjDiag.Info($"TrySetSearch OK name='{name}' ui={ui.GetType().Name}");
 				return true;
 			}
@@ -117,6 +161,83 @@ namespace RecipeBrowserJPChatSearch
 			{
 				RbjDiag.Error("TrySetSearch failed", ex);
 				return false;
+			}
+		}
+
+		/// <summary>
+		/// After a crafting search: wait for MS list refresh, then SetSelectedRecipe.
+		/// </summary>
+		internal static void ArmPendingCraftRecipeSelect(int itemType, Recipe preferredRecipe = null)
+		{
+			if (itemType <= 0)
+				return;
+
+			_pendingCraftSelectType = itemType;
+			_pendingPreferredRecipe = preferredRecipe;
+			_pendingCraftSelectFramesLeft = PendingCraftSelectMaxFrames;
+			_pendingCraftSelectMinWaitLeft = PendingCraftSelectMinWaitFrames;
+			RbjDiag.Info(
+				$"CraftSelect armed type={itemType} preferred={(preferredRecipe != null)} " +
+				$"maxFrames={PendingCraftSelectMaxFrames}");
+		}
+
+		internal static void ClearPendingCraftRecipeSelect()
+		{
+			_pendingCraftSelectType = 0;
+			_pendingCraftSelectFramesLeft = 0;
+			_pendingCraftSelectMinWaitLeft = 0;
+			_pendingPreferredRecipe = null;
+		}
+
+		/// <summary>Cheap: only while a pending craft-recipe select is armed.</summary>
+		internal static void TickPendingCraftRecipeSelect()
+		{
+			if (_pendingCraftSelectType <= 0)
+				return;
+
+			if (_pendingCraftSelectFramesLeft <= 0)
+			{
+				RbjDiag.Info($"CraftSelect=false reason=timeout type={_pendingCraftSelectType}");
+				ClearPendingCraftRecipeSelect();
+				return;
+			}
+
+			_pendingCraftSelectFramesLeft--;
+			if (_pendingCraftSelectMinWaitLeft > 0)
+				_pendingCraftSelectMinWaitLeft--;
+
+			if (!IsCraftingUiOpen())
+			{
+				if (_pendingCraftSelectFramesLeft <= 0)
+				{
+					RbjDiag.Info("CraftSelect=false reason=ui-closed");
+					ClearPendingCraftRecipeSelect();
+				}
+
+				return;
+			}
+
+			if (IsStorageRefreshing())
+				return;
+
+			if (_pendingCraftSelectMinWaitLeft > 0)
+				return;
+
+			int type = _pendingCraftSelectType;
+			Recipe preferred = _pendingPreferredRecipe;
+			bool ok = TrySelectCraftRecipeForItemType(type, preferred);
+			if (ok)
+			{
+				RbjDiag.Info($"CraftSelect=true type={type} preferred={(preferred != null)}");
+				ClearPendingCraftRecipeSelect();
+				return;
+			}
+
+			// List may still be empty for a few frames after RefreshUI clears — keep waiting.
+			if (_pendingCraftSelectFramesLeft <= 0)
+			{
+				RbjDiag.Info($"CraftSelect=false reason=no-match-or-timeout type={type}");
+				ClearPendingCraftRecipeSelect();
 			}
 		}
 
@@ -350,6 +471,401 @@ namespace RecipeBrowserJPChatSearch
 			catch (Exception ex)
 			{
 				RbjDiag.Warn($"CraftFilters failed (search continues): {ex.GetType().Name}: {ex.Message}");
+			}
+		}
+
+		private static bool TrySelectCraftRecipeForItemType(int itemType, Recipe preferredRecipe)
+		{
+			if (itemType <= 0 || !EnsureCraftSelectReflection())
+				return false;
+
+			try
+			{
+				if (IsStorageRefreshing())
+					return false;
+
+				Recipe chosen = TryPickFromDisplayedRecipes(itemType, preferredRecipe)
+					?? TryPickFromResultToRecipe(itemType, preferredRecipe);
+
+				if (chosen == null)
+				{
+					RbjDiag.Info($"CraftSelect no recipe for type={itemType}");
+					return false;
+				}
+
+				_setSelectedRecipe.Invoke(null, new object[] { chosen });
+				TryAddCraftHistory(chosen);
+				RequestStorageRefresh(forceFullRefresh: false);
+				RbjDiag.Info(
+					$"CraftSelect SetSelectedRecipe type={chosen.createItem.type} " +
+					$"stack={chosen.createItem.stack} matchedPreferred={RecipesEquivalent(preferredRecipe, chosen)}");
+				return true;
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Error("TrySelectCraftRecipeForItemType failed", ex);
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// 1) preferred recipe if present and craftable
+		/// 2) leftmost craftable for item type
+		/// 3) leftmost any for item type
+		/// </summary>
+		private static Recipe TryPickFromDisplayedRecipes(int itemType, Recipe preferredRecipe)
+		{
+			if (_craftingRecipesField?.GetValue(null) is not IList recipes || recipes.Count == 0)
+				return null;
+
+			IList available = _craftingRecipeAvailableField?.GetValue(null) as IList;
+			Recipe preferredMatch = null;
+			bool preferredAvailable = false;
+			Recipe firstCraftable = null;
+			Recipe firstAny = null;
+
+			for (int i = 0; i < recipes.Count; i++)
+			{
+				if (recipes[i] is not Recipe recipe)
+					continue;
+				if (recipe.createItem == null || recipe.createItem.type != itemType)
+					continue;
+
+				firstAny ??= recipe;
+
+				bool isAvailable = false;
+				if (available != null && i < available.Count && available[i] is bool flag)
+					isAvailable = flag;
+				else
+					isAvailable = InvokeIsAvailable(recipe);
+
+				if (isAvailable)
+					firstCraftable ??= recipe;
+
+				if (preferredRecipe != null
+					&& preferredMatch == null
+					&& RecipesEquivalent(preferredRecipe, recipe))
+				{
+					preferredMatch = recipe;
+					preferredAvailable = isAvailable;
+				}
+			}
+
+			if (preferredMatch != null && preferredAvailable)
+				return preferredMatch;
+			if (firstCraftable != null)
+				return firstCraftable;
+			return firstAny;
+		}
+
+		private static Recipe TryPickFromResultToRecipe(int itemType, Recipe preferredRecipe)
+		{
+			if (_resultToRecipeField?.GetValue(null) is not IDictionary map)
+				return null;
+
+			object value = null;
+			foreach (DictionaryEntry entry in map)
+			{
+				if (entry.Key is int key && key == itemType)
+				{
+					value = entry.Value;
+					break;
+				}
+			}
+
+			if (value == null)
+				return null;
+
+			Recipe preferredMatch = null;
+			bool preferredAvailable = false;
+			Recipe firstCraftable = null;
+			Recipe firstAny = null;
+
+			void Consider(Recipe r)
+			{
+				if (r?.createItem == null || r.createItem.type != itemType)
+					return;
+
+				firstAny ??= r;
+				bool avail = InvokeIsAvailable(r);
+				if (avail)
+					firstCraftable ??= r;
+
+				if (preferredRecipe != null
+					&& preferredMatch == null
+					&& RecipesEquivalent(preferredRecipe, r))
+				{
+					preferredMatch = r;
+					preferredAvailable = avail;
+				}
+			}
+
+			if (value is Recipe[] arr)
+			{
+				foreach (Recipe r in arr)
+					Consider(r);
+			}
+			else if (value is IEnumerable enumerable)
+			{
+				foreach (object o in enumerable)
+				{
+					if (o is Recipe r)
+						Consider(r);
+				}
+			}
+
+			if (preferredMatch != null && preferredAvailable)
+				return preferredMatch;
+			if (firstCraftable != null)
+				return firstCraftable;
+			return firstAny;
+		}
+
+		/// <summary>Same create item + required items (type/stack) + required tiles.</summary>
+		internal static bool RecipesEquivalent(Recipe a, Recipe b)
+		{
+			if (a == null || b == null)
+				return false;
+			if (ReferenceEquals(a, b))
+				return true;
+			if (a.createItem == null || b.createItem == null)
+				return false;
+			if (a.createItem.type != b.createItem.type || a.createItem.stack != b.createItem.stack)
+				return false;
+
+			if (a.requiredItem == null || b.requiredItem == null)
+				return false;
+			if (a.requiredItem.Count != b.requiredItem.Count)
+				return false;
+
+			// Order-independent multiset of type+stack (RB vs MS list order may differ).
+			var counts = new Dictionary<long, int>();
+			foreach (Item req in a.requiredItem)
+			{
+				if (req == null || req.type <= 0)
+					continue;
+				long key = ((long)req.type << 32) | (uint)req.stack;
+				counts.TryGetValue(key, out int n);
+				counts[key] = n + 1;
+			}
+
+			foreach (Item req in b.requiredItem)
+			{
+				if (req == null || req.type <= 0)
+					continue;
+				long key = ((long)req.type << 32) | (uint)req.stack;
+				if (!counts.TryGetValue(key, out int n) || n <= 0)
+					return false;
+				if (n == 1)
+					counts.Remove(key);
+				else
+					counts[key] = n - 1;
+			}
+
+			if (counts.Count != 0)
+				return false;
+
+			int tileCountA = a.requiredTile?.Count ?? 0;
+			int tileCountB = b.requiredTile?.Count ?? 0;
+			if (tileCountA != tileCountB)
+				return false;
+
+			if (tileCountA > 0)
+			{
+				var tiles = new Dictionary<int, int>();
+				foreach (int t in a.requiredTile)
+				{
+					tiles.TryGetValue(t, out int n);
+					tiles[t] = n + 1;
+				}
+
+				foreach (int t in b.requiredTile)
+				{
+					if (!tiles.TryGetValue(t, out int n) || n <= 0)
+						return false;
+					if (n == 1)
+						tiles.Remove(t);
+					else
+						tiles[t] = n - 1;
+				}
+
+				if (tiles.Count != 0)
+					return false;
+			}
+
+			return true;
+		}
+
+		private static bool InvokeIsAvailable(Recipe recipe)
+		{
+			if (_isRecipeAvailable == null || recipe == null)
+				return false;
+
+			try
+			{
+				ParameterInfo[] parms = _isRecipeAvailable.GetParameters();
+				object result = parms.Length >= 2
+					? _isRecipeAvailable.Invoke(null, new object[] { recipe, true })
+					: _isRecipeAvailable.Invoke(null, new object[] { recipe });
+				return result is true;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
+		private static void TryAddCraftHistory(Recipe recipe)
+		{
+			if (recipe == null || _craftingHistoryField == null || _historyAddHistory == null)
+				return;
+
+			try
+			{
+				object ui = _craftingUiField?.GetValue(null);
+				object history = ui == null ? null : _craftingHistoryField.GetValue(ui);
+				if (history == null)
+					return;
+
+				_historyAddHistory.Invoke(history, new object[] { recipe });
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Warn($"CraftSelect history add failed: {ex.GetType().Name}");
+			}
+		}
+
+		private static bool IsStorageRefreshing()
+		{
+			if (!EnsureCraftSelectReflection())
+				return false;
+
+			try
+			{
+				if (_currentlyRefreshingProperty?.GetValue(null) is true)
+					return true;
+				if (_refreshUiProperty?.GetValue(null) is true)
+					return true;
+				if (_refreshUiField?.GetValue(null) is true)
+					return true;
+			}
+			catch
+			{
+				// ignore
+			}
+
+			return false;
+		}
+
+		private static void RequestStorageRefresh(bool forceFullRefresh)
+		{
+			try
+			{
+				_setRefresh?.Invoke(null, new object[] { forceFullRefresh });
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Warn($"RequestStorageRefresh failed: {ex.GetType().Name}");
+			}
+		}
+
+		private static bool EnsureCraftSelectReflection()
+		{
+			if (_craftSelectResolved)
+				return !_craftSelectFailed;
+
+			_craftSelectResolved = true;
+			try
+			{
+				if (!ModLoader.TryGetMod("MagicStorage", out Mod magicStorage))
+				{
+					_craftSelectFailed = true;
+					return false;
+				}
+
+				Assembly asm = magicStorage.Code;
+				const BindingFlags staticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+				const BindingFlags instanceFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+				Type craftingGui = asm.GetType("MagicStorage.CraftingGUI");
+				Type storageGui = asm.GetType("MagicStorage.StorageGUI");
+				Type magicCache = asm.GetType("MagicStorage.Common.Systems.MagicCache");
+				Type craftingUiState = asm.GetType("MagicStorage.UI.States.CraftingUIState");
+
+				_setSelectedRecipe = craftingGui?.GetMethod(
+					"SetSelectedRecipe",
+					staticFlags,
+					null,
+					new[] { typeof(Recipe) },
+					null);
+				_craftingRecipesField = craftingGui?.GetField("recipes", staticFlags);
+				_craftingRecipeAvailableField = craftingGui?.GetField("recipeAvailable", staticFlags);
+				_isRecipeAvailable = craftingGui?.GetMethod(
+					"IsAvailable",
+					staticFlags,
+					null,
+					new[] { typeof(Recipe), typeof(bool) },
+					null)
+					?? craftingGui?.GetMethod(
+						"IsAvailable",
+						staticFlags,
+						null,
+						new[] { typeof(Recipe) },
+						null);
+
+				_currentlyRefreshingProperty = storageGui?.GetProperty("CurrentlyRefreshing", staticFlags);
+				_refreshUiProperty = storageGui?.GetProperty("RefreshUI", staticFlags);
+				_refreshUiField = _refreshUiProperty == null
+					? storageGui?.GetField("RefreshUI", staticFlags)
+					: null;
+
+				// Prefer StorageGUI.SetRefresh — MagicUI may not expose SetRefresh on newer MS.
+				MethodInfo storageSetRefresh = storageGui?.GetMethod(
+					"SetRefresh",
+					staticFlags,
+					null,
+					new[] { typeof(bool) },
+					null);
+				if (storageSetRefresh != null)
+					_setRefresh = storageSetRefresh;
+
+				_resultToRecipeField = magicCache?.GetField("ResultToRecipe", staticFlags);
+
+				_craftingHistoryField = craftingUiState?.GetField("history", instanceFlags);
+				if (_craftingHistoryField != null)
+				{
+					Type histType = _craftingHistoryField.FieldType;
+					_historyAddHistory = histType.GetMethod(
+						"AddHistory",
+						instanceFlags,
+						null,
+						new[] { typeof(Recipe) },
+						null);
+				}
+
+				_craftSelectFailed = _setSelectedRecipe == null || _craftingRecipesField == null;
+
+				if (_craftSelectFailed)
+				{
+					RbjDiag.Warn(
+						$"CraftSelect reflection incomplete: setSelected={_setSelectedRecipe != null} " +
+						$"recipes={_craftingRecipesField != null} available={_craftingRecipeAvailableField != null}");
+				}
+				else
+				{
+					RbjDiag.Info(
+						$"CraftSelect reflection OK isAvailable={_isRecipeAvailable != null} " +
+						$"refreshing={_currentlyRefreshingProperty != null} " +
+						$"resultMap={_resultToRecipeField != null} history={_historyAddHistory != null}");
+				}
+
+				return !_craftSelectFailed;
+			}
+			catch (Exception ex)
+			{
+				_craftSelectFailed = true;
+				RbjDiag.Warn($"EnsureCraftSelectReflection failed: {ex.GetType().Name}: {ex.Message}");
+				return false;
 			}
 		}
 
@@ -831,7 +1347,18 @@ namespace RecipeBrowserJPChatSearch
 				_isStorageOpen = _magicUiType.GetMethod("IsStorageUIOpen", staticFlags);
 				_craftingUiField = _magicUiType.GetField("craftingUI", staticFlags);
 				_storageUiField = _magicUiType.GetField("storageUI", staticFlags);
+				// Prefer StorageGUI.SetRefresh when available (resolved in EnsureCraftSelectReflection).
 				_setRefresh = _magicUiType.GetMethod("SetRefresh", staticFlags, null, new[] { typeof(bool) }, null);
+				if (_setRefresh == null)
+				{
+					Type storageGuiEarly = asm.GetType("MagicStorage.StorageGUI");
+					_setRefresh = storageGuiEarly?.GetMethod(
+						"SetRefresh",
+						staticFlags,
+						null,
+						new[] { typeof(bool) },
+						null);
+				}
 
 				Type baseStorageUi = asm.GetType("MagicStorage.UI.States.BaseStorageUI");
 				_getDefaultPage = baseStorageUi?
@@ -897,6 +1424,7 @@ namespace RecipeBrowserJPChatSearch
 		internal static void Unload()
 		{
 			UnhookCraftPanelResetClearSearch();
+			ClearPendingCraftRecipeSelect();
 
 			_resolved = false;
 			_failed = false;
@@ -913,6 +1441,19 @@ namespace RecipeBrowserJPChatSearch
 			_stateReset = null;
 			_stateUnfocus = null;
 			_setRefresh = null;
+
+			_craftSelectResolved = false;
+			_craftSelectFailed = false;
+			_setSelectedRecipe = null;
+			_craftingRecipesField = null;
+			_craftingRecipeAvailableField = null;
+			_isRecipeAvailable = null;
+			_currentlyRefreshingProperty = null;
+			_refreshUiProperty = null;
+			_refreshUiField = null;
+			_resultToRecipeField = null;
+			_craftingHistoryField = null;
+			_historyAddHistory = null;
 
 			_filterResolved = false;
 			_filterFailed = false;

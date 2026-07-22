@@ -4,5 +4,6 @@ obj/
 *.user
 *.suo
 除外/
+debug/
 *.tmod
 *.zip

@@ -142,6 +142,7 @@ namespace RecipeBrowserJPChatSearch
 			RecipeBrowserCursorSearchBridge.TryInitialize();
 
 			MagicStorageCraftingAccessHelper.TickPendingSearch();
+			MagicStorageSearchHelper.TickPendingCraftRecipeSelect();
 
 			ChatBrowseHelper.DrawHistoryOverlay();
 

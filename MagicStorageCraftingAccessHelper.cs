@@ -29,6 +29,7 @@ namespace RecipeBrowserJPChatSearch
 		private static MethodInfo _openStorageMethod;
 
 		private static Item _pendingItem;
+		private static Recipe _pendingPreferredRecipe;
 		private static int _pendingFramesLeft;
 		private static Point16 _pendingTile = Point16.NegativeOne;
 
@@ -59,11 +60,19 @@ namespace RecipeBrowserJPChatSearch
 			_ => "None"
 		};
 
+		internal static bool TryOpenNearestCraftingAccessAndSetSearch(
+			Item item,
+			out string failReason)
+			=> TryOpenNearestCraftingAccessAndSetSearch(item, preferredRecipe: null, out failReason);
+
 		/// <summary>
 		/// Finds reachable Crafting Access TEs, opens the nearest via Magic Storage's OpenStorage path,
-		/// then sets search (or arms a short pending apply).
+		/// then sets search (or arms a short pending apply) and preferred-recipe select.
 		/// </summary>
-		internal static bool TryOpenNearestCraftingAccessAndSetSearch(Item item, out string failReason)
+		internal static bool TryOpenNearestCraftingAccessAndSetSearch(
+			Item item,
+			Recipe preferredRecipe,
+			out string failReason)
 		{
 			failReason = string.Empty;
 			ClearPending();
@@ -109,18 +118,19 @@ namespace RecipeBrowserJPChatSearch
 			RbjDiag.Info($"OpenCraftingAccess=true tile=({selected.X},{selected.Y})");
 
 			if (MagicStorageSearchHelper.IsCraftingUiOpen()
-				&& MagicStorageSearchHelper.TrySetSearchFromItem(item))
+				&& MagicStorageSearchHelper.TrySetSearchFromItemAndSelectCraftRecipe(item, preferredRecipe))
 			{
-				RbjDiag.Info("SetSearchSuccess=true (immediate after open)");
+				RbjDiag.Info("SetSearchSuccess=true (immediate after open + craft select armed)");
 				return true;
 			}
 
 			_pendingItem = item.Clone();
+			_pendingPreferredRecipe = preferredRecipe;
 			_pendingFramesLeft = PendingSearchMaxFrames;
 			_pendingTile = selected;
 			RbjDiag.Info(
 				$"SetSearch deferred pendingFrames={PendingSearchMaxFrames} " +
-				$"tile=({selected.X},{selected.Y}) type={item.type}");
+				$"tile=({selected.X},{selected.Y}) type={item.type} preferred={(preferredRecipe != null)}");
 			return true;
 		}
 
@@ -151,9 +161,12 @@ namespace RecipeBrowserJPChatSearch
 				return;
 			}
 
-			bool ok = MagicStorageSearchHelper.TrySetSearchFromItem(_pendingItem);
+			bool ok = MagicStorageSearchHelper.TrySetSearchFromItemAndSelectCraftRecipe(
+				_pendingItem,
+				_pendingPreferredRecipe);
 			RbjDiag.Info(
-				$"SetSearchSuccess={ok} (pending) type={_pendingItem.type} " +
+				$"SetSearchSuccess={ok} (pending+select) type={_pendingItem.type} " +
+				$"preferred={(_pendingPreferredRecipe != null)} " +
 				$"tile=({_pendingTile.X},{_pendingTile.Y})");
 			ClearPending();
 		}
@@ -161,6 +174,7 @@ namespace RecipeBrowserJPChatSearch
 		internal static void ClearPending()
 		{
 			_pendingItem = null;
+			_pendingPreferredRecipe = null;
 			_pendingFramesLeft = 0;
 			_pendingTile = Point16.NegativeOne;
 		}

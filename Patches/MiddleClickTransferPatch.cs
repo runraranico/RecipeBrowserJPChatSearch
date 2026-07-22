@@ -15,8 +15,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 	/// - Magic Storage item → Recipe Browser (query / item-tab name)
 	/// - Recipe Browser item → Magic Storage search bar
 	///   · Storage UI open → keep it, set storage search
-	///   · Crafting UI open → keep it, set crafting search
-	///   · None open → open nearest reachable Crafting Access only, then set search
+	///   · Crafting UI open → keep it, set crafting search + select recipe (craftable/leftmost)
+	///   · None open → open nearest reachable Crafting Access only, then set search + select
 	/// </summary>
 	internal static class MiddleClickTransferPatch
 	{
@@ -24,6 +24,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 		private static PropertyInfo _msStoredItemProperty;
 		private static Type _rbItemSlotType;
 		private static FieldInfo _rbItemField;
+		private static Type _rbRecipeSlotType;
+		private static FieldInfo _rbRecipeSlotIndexField;
 
 		internal static Type MsSlotType => _msSlotType;
 		internal static PropertyInfo MsStoredItemProperty => _msStoredItemProperty;
@@ -47,8 +49,15 @@ namespace RecipeBrowserJPChatSearch.Patches
 				_rbItemField = _rbItemSlotType?.GetField(
 					"item",
 					BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+				_rbRecipeSlotType = recipeBrowserMod.Code.GetType("RecipeBrowser.UIElements.UIRecipeSlot")
+					?? recipeBrowserMod.Code.GetType("RecipeBrowser.UIRecipeSlot");
+				_rbRecipeSlotIndexField = _rbRecipeSlotType?.GetField(
+					"index",
+					BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 				if (_rbItemSlotType == null || _rbItemField == null)
 					RbjDiag.Warn("MiddleClickTransferPatch: Recipe Browser UIItemSlot reflection incomplete");
+				if (_rbRecipeSlotType == null || _rbRecipeSlotIndexField == null)
+					RbjDiag.Info("MiddleClickTransferPatch: UIRecipeSlot index unavailable (preferred-recipe match soft)");
 			}
 
 			RbjDiag.Info("MiddleClickTransferPatch ready (search hotkey via PostDraw)");
@@ -60,6 +69,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 			_msStoredItemProperty = null;
 			_rbItemSlotType = null;
 			_rbItemField = null;
+			_rbRecipeSlotType = null;
+			_rbRecipeSlotIndexField = null;
 		}
 
 		/// <summary>
@@ -172,7 +183,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (_rbItemSlotType == null || _rbItemField == null)
 				return false;
 
-			if (!TryGetHoveredRecipeBrowserItem(hoverSnap, out Item item, out how) || item.IsAir)
+			if (!TryGetHoveredRecipeBrowserItem(hoverSnap, out Item item, out how, out Recipe preferredRecipe)
+				|| item.IsAir)
 				return false;
 
 			string itemName = RecipeBrowserNameSearchHelper.GetSearchName(item);
@@ -181,6 +193,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			RbjDiag.Info(
 				$"RBTransferKeyPressed key=[{keyLabel}] how={how} itemType={item.type} itemName={itemName} " +
+				$"preferredRecipe={(preferredRecipe != null)} " +
 				$"CurrentUi={MagicStorageCraftingAccessHelper.UiKindLabel(uiKind)}");
 
 			if (uiKind == MagicStorageUiKind.Storage)
@@ -201,8 +214,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			if (uiKind == MagicStorageUiKind.Crafting)
 			{
-				RbjDiag.Info("Action=SetCraftingSearch");
-				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
+				RbjDiag.Info("Action=SetCraftingSearch+SelectRecipe");
+				if (!MagicStorageSearchHelper.TrySetSearchFromItemAndSelectCraftRecipe(item, preferredRecipe))
 				{
 					RbjDiag.Info("SetSearchSuccess=false reason=crafting-search-fail");
 					SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→CraftingSearch type={item.type}");
@@ -217,7 +230,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			// No MS UI open → Crafting Access only (never auto-open Heart / Storage Access / Remote).
 			RbjDiag.Info("Action=OpenNearestCraftingAccessThenSearch");
-			if (!MagicStorageCraftingAccessHelper.TryOpenNearestCraftingAccessAndSetSearch(item, out string failReason))
+			if (!MagicStorageCraftingAccessHelper.TryOpenNearestCraftingAccessAndSetSearch(
+					item, preferredRecipe, out string failReason))
 			{
 				RbjDiag.Info($"SetSearchSuccess=false reason={failReason}");
 				SearchHotkeyProbe.LogBlock("transfer-fail", $"RB→OpenCraft type={item.type} {failReason}");
@@ -259,10 +273,15 @@ namespace RecipeBrowserJPChatSearch.Patches
 			return false;
 		}
 
-		private static bool TryGetHoveredRecipeBrowserItem(Item hoverSnap, out Item item, out string how)
+		private static bool TryGetHoveredRecipeBrowserItem(
+			Item hoverSnap,
+			out Item item,
+			out string how,
+			out Recipe preferredRecipe)
 		{
 			item = null;
 			how = "no-rb";
+			preferredRecipe = null;
 			if (_rbItemSlotType == null || _rbItemField == null)
 			{
 				how = "reflect-missing";
@@ -274,6 +293,18 @@ namespace RecipeBrowserJPChatSearch.Patches
 				UIElement cur = under;
 				while (cur != null)
 				{
+					if (TryGetRecipeFromUiRecipeSlot(cur, out preferredRecipe))
+					{
+						item = preferredRecipe.createItem;
+						if (item != null && !item.IsAir)
+						{
+							how = "UIRecipeSlot-index";
+							return true;
+						}
+
+						preferredRecipe = null;
+					}
+
 					if (_rbItemSlotType.IsInstanceOfType(cur))
 					{
 						item = _rbItemField.GetValue(cur) as Item;
@@ -288,9 +319,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 				}
 
 				// Deep ContainsPoint search for UIItemSlot under the RB panel root.
-				if (TryFindRbSlotUnderMouse(under, out item))
+				if (TryFindRbSlotUnderMouse(under, out item, out preferredRecipe))
 				{
-					how = "ContainsPoint-UIItemSlot";
+					how = preferredRecipe != null ? "ContainsPoint-UIRecipeSlot" : "ContainsPoint-UIItemSlot";
 					return true;
 				}
 			}
@@ -302,9 +333,27 @@ namespace RecipeBrowserJPChatSearch.Patches
 			return false;
 		}
 
-		private static bool TryFindRbSlotUnderMouse(UIElement start, out Item item)
+		private static bool TryGetRecipeFromUiRecipeSlot(UIElement el, out Recipe recipe)
+		{
+			recipe = null;
+			if (el == null || _rbRecipeSlotType == null || _rbRecipeSlotIndexField == null)
+				return false;
+			if (!_rbRecipeSlotType.IsInstanceOfType(el))
+				return false;
+
+			if (_rbRecipeSlotIndexField.GetValue(el) is not int index)
+				return false;
+			if (index < 0 || index >= Recipe.numRecipes)
+				return false;
+
+			recipe = Main.recipe[index];
+			return recipe != null && recipe.createItem != null && !recipe.createItem.IsAir;
+		}
+
+		private static bool TryFindRbSlotUnderMouse(UIElement start, out Item item, out Recipe preferredRecipe)
 		{
 			item = null;
+			preferredRecipe = null;
 			if (start == null || _rbItemSlotType == null || _rbItemField == null)
 				return false;
 
@@ -320,22 +369,36 @@ namespace RecipeBrowserJPChatSearch.Patches
 				root = root.Parent;
 			}
 
-			return TryFindRbSlotRecursive(root, mouse, out item);
+			return TryFindRbSlotRecursive(root, mouse, out item, out preferredRecipe);
 		}
 
-		private static bool TryFindRbSlotRecursive(UIElement el, Vector2 mouse, out Item item)
+		private static bool TryFindRbSlotRecursive(
+			UIElement el,
+			Vector2 mouse,
+			out Item item,
+			out Recipe preferredRecipe)
 		{
 			item = null;
+			preferredRecipe = null;
 			if (el == null)
 				return false;
 
 			foreach (UIElement child in el.Children)
 			{
-				if (TryFindRbSlotRecursive(child, mouse, out item))
+				if (TryFindRbSlotRecursive(child, mouse, out item, out preferredRecipe))
 					return true;
 			}
 
-			if (_rbItemSlotType.IsInstanceOfType(el) && el.ContainsPoint(mouse))
+			if (!el.ContainsPoint(mouse))
+				return false;
+
+			if (TryGetRecipeFromUiRecipeSlot(el, out preferredRecipe))
+			{
+				item = preferredRecipe.createItem;
+				return item != null && !item.IsAir;
+			}
+
+			if (_rbItemSlotType.IsInstanceOfType(el))
 			{
 				item = _rbItemField.GetValue(el) as Item;
 				return item != null && !item.IsAir;
