@@ -37,12 +37,16 @@ namespace RecipeBrowserJPChatSearch
 			_postDrawCount++;
 			ZoomRemapsThisFrame = 0;
 			// Depth should be 0 at PostDraw entry; leftover means a prior remap escaped finally.
-			if (ZoomDepth != 0)
+			if (ZoomDepth == 0)
+				return;
+
+			if (RbjDiag.Enabled)
 			{
 				RbjDiag.Warn(
 					$"RbjRenderHealth ZOOM_DEPTH_LEAK at PostDraw enter depth={ZoomDepth} path={path}");
-				ZoomDepth = 0;
 			}
+
+			ZoomDepth = 0;
 		}
 
 		internal static void NoteZoomRemapEnter()
@@ -104,14 +108,17 @@ namespace RecipeBrowserJPChatSearch
 			RbjDiag.Info("RbjRenderHealth chat-closed → parse-cache invalidate");
 		}
 
+		/// <summary>
+		/// PostDraw 終了時。公開ビルド（<see cref="RbjDiag.Enabled"/> = false）では
+		/// 機能必須だけ（チャット閉鎖キャッシュ無効化・ズーム深度リセット・マウス復元）。
+		/// Snapshot / trail / pulse / suspect は verbose 時のみ。
+		/// </summary>
 		internal static void TickAfterPostDraw(string path, RbjCursor.MouseSnap? mouseAtEntry = null)
 		{
 			bool composing = Main.drawingPlayerChat;
-			bool browsing = ChatBrowseHelper.IsDisplayingOverlay;
-			bool playerInv = Main.playerInventory;
-			int hover = Main.HoverItem != null && !Main.HoverItem.IsAir ? Main.HoverItem.type : 0;
+			bool verbose = RbjDiag.Enabled;
 
-			if (!_wasComposing && composing)
+			if (verbose && !_wasComposing && composing)
 			{
 				Mark("chat-open");
 				RbjDiag.Info($"RbjRenderHealth chat-open {Snapshot(path)}");
@@ -119,6 +126,51 @@ namespace RecipeBrowserJPChatSearch
 
 			if (_wasComposing && !composing)
 				OnChatClosed();
+			_wasComposing = composing;
+
+			if (ZoomDepth != 0)
+			{
+				if (verbose)
+				{
+					RbjDiag.Warn(
+						$"RbjRenderHealth ZOOM_DEPTH_LEAK after {path} depth={ZoomDepth} remapsFrame={ZoomRemapsThisFrame}");
+					DumpTrail("zoom-depth-leak");
+				}
+
+				ZoomDepth = 0;
+			}
+
+			if (mouseAtEntry.HasValue)
+			{
+				var snap = mouseAtEntry.Value;
+				if (Main.mouseX != snap.MainX || Main.mouseY != snap.MainY
+					|| PlayerInput.MouseX != snap.InputX || PlayerInput.MouseY != snap.InputY)
+				{
+					if (verbose)
+					{
+						RbjDiag.Warn(
+							$"RbjRenderHealth ZOOM/MOUSE LEAK after {path} " +
+							$"now=({Main.mouseX},{Main.mouseY})/{PlayerInput.MouseX},{PlayerInput.MouseY} " +
+							$"want=({snap.MainX},{snap.MainY})/{snap.InputX},{snap.InputY} | {Snapshot(path)}");
+						DumpTrail("mouse-leak");
+					}
+
+					RbjCursor.RestoreMouse(snap);
+				}
+			}
+
+			if (!verbose)
+				return;
+
+			TickAfterPostDrawVerbose(path, composing);
+		}
+
+		/// <summary>Verbose only: trail / Snapshot / pulse / anomaly Warn.</summary>
+		private static void TickAfterPostDrawVerbose(string path, bool composing)
+		{
+			bool browsing = ChatBrowseHelper.IsDisplayingOverlay;
+			bool playerInv = Main.playerInventory;
+			int hover = Main.HoverItem != null && !Main.HoverItem.IsAir ? Main.HoverItem.type : 0;
 
 			if (!_wasBrowsing && browsing)
 			{
@@ -146,17 +198,8 @@ namespace RecipeBrowserJPChatSearch
 				_prevHoverType = hover;
 			}
 
-			_wasComposing = composing;
 			_wasBrowsing = browsing;
 			_wasPlayerInv = playerInv;
-
-			if (ZoomDepth != 0)
-			{
-				RbjDiag.Warn(
-					$"RbjRenderHealth ZOOM_DEPTH_LEAK after {path} depth={ZoomDepth} remapsFrame={ZoomRemapsThisFrame}");
-				DumpTrail("zoom-depth-leak");
-				ZoomDepth = 0;
-			}
 
 			if (ZoomRemapsThisFrame >= 8)
 			{
@@ -165,38 +208,26 @@ namespace RecipeBrowserJPChatSearch
 				DumpTrail("zoom-remap-spam");
 			}
 
-			if (mouseAtEntry.HasValue)
-			{
-				var snap = mouseAtEntry.Value;
-				if (Main.mouseX != snap.MainX || Main.mouseY != snap.MainY
-					|| PlayerInput.MouseX != snap.InputX || PlayerInput.MouseY != snap.InputY)
-				{
-					RbjDiag.Warn(
-						$"RbjRenderHealth ZOOM/MOUSE LEAK after {path} " +
-						$"now=({Main.mouseX},{Main.mouseY})/{PlayerInput.MouseX},{PlayerInput.MouseY} " +
-						$"want=({snap.MainX},{snap.MainY})/{snap.InputX},{snap.InputY} | {Snapshot(path)}");
-					DumpTrail("mouse-leak");
-					RbjCursor.RestoreMouse(snap);
-				}
-			}
-
-			// After CaptureFrameHints: icon + tip remap same frame ⇒ flicker suspect.
 			RbjDiagPolicy.ObserveIconVsTipRemap(
 				WorldPlacedItemHover.FrameIconEnabled,
 				WorldPlacedItemHover.FrameIconId,
 				ZoomRemapsThisFrame);
 
-			string snapText = Snapshot(path);
-			bool badZoom = snapText.Contains("BAD_ZOOM");
-			// Steady ZOOM_MISMATCH with BetterZoom is normal at extreme zoom — not a black-screen signal alone.
+			// Numeric checks — Snapshot only when logging a hit / pulse.
+			Vector2 zoom = Main.GameViewMatrix.Zoom;
+			float zt = Main.GameZoomTarget;
+			bool badZoom = float.IsNaN(zoom.X) || float.IsInfinity(zoom.X)
+				|| float.IsNaN(zoom.Y) || float.IsInfinity(zoom.Y);
+			bool zoomMismatch = zt > 0.01f
+				&& (Math.Abs(zoom.X - zt) > 0.2f || Math.Abs(zoom.Y - zt) > 0.2f);
 			bool remapAnomaly = ZoomRemapsThisFrame >= 3 || ZoomDepth != 0;
-			bool suspect = badZoom || (snapText.Contains("ZOOM_MISMATCH") && remapAnomaly);
+			bool suspect = badZoom || (zoomMismatch && remapAnomaly);
 			long now = Environment.TickCount64;
 
 			if (suspect && now >= _nextMismatchTick)
 			{
 				_nextMismatchTick = now + 5000;
-				RbjDiag.Warn($"RbjRenderHealth suspect black-world culprit: {snapText}");
+				RbjDiag.Warn($"RbjRenderHealth suspect black-world culprit: {Snapshot(path)}");
 				DumpTrail("zoom-mismatch");
 			}
 
@@ -204,11 +235,11 @@ namespace RecipeBrowserJPChatSearch
 				return;
 
 			_nextPeriodicTick = now + 5000;
-			if (composing || browsing || playerInv || HoverTooltipSuppress.Active || RbjDiag.Enabled)
+			if (composing || browsing || playerInv || HoverTooltipSuppress.Active)
 			{
 				RbjDiag.Info(
 					$"RbjRenderHealth pulse postDraws={_postDrawCount} remapsFrame={ZoomRemapsThisFrame} " +
-					$"remapsSession={ZoomRemapsTotalSession} {snapText}");
+					$"remapsSession={ZoomRemapsTotalSession} {Snapshot(path)}");
 				DumpTrail("pulse");
 				_postDrawCount = 0;
 			}
@@ -267,7 +298,7 @@ namespace RecipeBrowserJPChatSearch
 			RbjDiag.Info(
 				"World pick = cursorItemIcon only (no tip/SetZoom/F). " +
 				"NPC = PreHover/smart/talk while RB open. Inv/MS sync Recipe+ItemName.");
-			if (betterZoom)
+			if (betterZoom && RbjDiag.Enabled)
 			{
 				RbjDiag.Warn(
 					"BetterZoom detected. Extreme zoom can mis-pick tiles vs UI tip. " +

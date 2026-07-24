@@ -33,7 +33,7 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 			}
 
-			RecipeBrowserCursorSearchBridge.PerformInvMsSyncedQuery(item.type);
+			RecipeBrowserCursorSearchBridge.PerformInvMsSyncedQuery(item);
 			RbjDiag.Info(
 				$"MS→RB synced query type={item.type} fromPanel={currentPanel} " +
 				$"name='{GetSearchName(item)}'");

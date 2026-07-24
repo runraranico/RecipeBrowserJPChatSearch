@@ -44,6 +44,9 @@ namespace RecipeBrowserJPChatSearch
 		private static MethodInfo _recipeQueryReplaceMethod;
 		private static MethodInfo _craftSetItemMethod;
 		private static MethodInfo _bestiaryQueryReplaceMethod;
+		private static MethodInfo _recipeBrowserCloseButtonClickedMethod;
+		private static MethodInfo _recipeCatalogueCloseButtonClickedMethod;
+		private static MethodInfo _bestiaryCloseButtonClickedMethod;
 		private static FieldInfo _tabControllerField;
 		private static MethodInfo _tabControllerSetPanelMethod;
 		private static FieldInfo _bestiaryUpdateNeededField;
@@ -110,6 +113,18 @@ namespace RecipeBrowserJPChatSearch
 		private static UIElement _rbUnderMouseCacheElement;
 
 		/// <summary>
+		/// One successful search-hotkey UI action per <see cref="Main.GameUpdateCount"/>.
+		/// Consumed only when an action is about to run (send / close / bestiary), not on resolve-miss.
+		/// </summary>
+		private static uint _lastConsumedSearchActionFrame = uint.MaxValue;
+
+		/// <summary>
+		/// After a real action, ignore further search actions until the hotkey is fully released.
+		/// Prevents phys-middle + Main.mouseMiddle dual-edge from firing a second action on the next frame.
+		/// </summary>
+		private static bool _searchActionAwaitingRelease;
+
+		/// <summary>
 		/// Search hotkey just pressed (default Mouse3 → hardware middle, ignores MOUSE3 remaps).
 		/// </summary>
 		internal static bool IsSearchHotkeyJustPressed()
@@ -118,6 +133,39 @@ namespace RecipeBrowserJPChatSearch
 		/// <summary>Search hotkey currently held.</summary>
 		internal static bool IsSearchHotkeyHeld()
 			=> ModKeybinds.IsSearchHotkeyHeld();
+
+		/// <summary>
+		/// True when this press already ran a search action (same frame or still held after consume).
+		/// Does not consume — safe to call before target resolve.
+		/// </summary>
+		internal static bool IsSearchActionAlreadyConsumed()
+		{
+			TickSearchActionReleaseGate();
+			uint frame = Main.GameUpdateCount;
+			return _lastConsumedSearchActionFrame == frame || _searchActionAwaitingRelease;
+		}
+
+		/// <summary>
+		/// Consume this press's search-hotkey action slot. Call only immediately before a real UI op.
+		/// </summary>
+		internal static bool TryConsumeSearchActionThisFrame(string source)
+		{
+			TickSearchActionReleaseGate();
+			uint frame = Main.GameUpdateCount;
+			if (_lastConsumedSearchActionFrame == frame || _searchActionAwaitingRelease)
+				return false;
+
+			_lastConsumedSearchActionFrame = frame;
+			_searchActionAwaitingRelease = true;
+			RbjDiag.Info($"Search action consumed frame={frame} source={source}");
+			return true;
+		}
+
+		private static void TickSearchActionReleaseGate()
+		{
+			if (_searchActionAwaitingRelease && !IsSearchHotkeyHeld())
+				_searchActionAwaitingRelease = false;
+		}
 
 		internal static void Initialize(Mod recipeBrowserMod) => TryInitialize(recipeBrowserMod);
 
@@ -136,6 +184,8 @@ namespace RecipeBrowserJPChatSearch
 			_rbUnderMouseCacheFrame = uint.MaxValue;
 			_rbUnderMouseCacheHit = false;
 			_rbUnderMouseCacheElement = null;
+			_lastConsumedSearchActionFrame = uint.MaxValue;
+			_searchActionAwaitingRelease = false;
 		}
 
 		internal static bool IsPhysicalMiddleDown()
@@ -152,6 +202,7 @@ namespace RecipeBrowserJPChatSearch
 			PreviousMouseRight = mouseRight;
 			PreviousMouseMiddle = mouseMiddle;
 			PreviousPhysicalMiddle = IsPhysicalMiddleDown();
+			TickSearchActionReleaseGate();
 		}
 
 		internal static bool TryInitialize(Mod recipeBrowserMod = null)
@@ -214,6 +265,13 @@ namespace RecipeBrowserJPChatSearch
 			_recipeBrowserCurrentPanelProperty = recipeBrowserUiType.GetProperty("CurrentPanel", anyInstance);
 			_mainPanelField = recipeBrowserUiType.GetField("mainPanel", anyInstance);
 			_favoritePanelField = recipeBrowserUiType.GetField("favoritePanel", anyInstance);
+			// Same handler as Recipe Browser's X button (toggles ShowRecipeBrowser + catalogue cleanup).
+			_recipeBrowserCloseButtonClickedMethod = recipeBrowserUiType.GetMethod(
+				"CloseButtonClicked",
+				anyInstance,
+				null,
+				new[] { typeof(UIMouseEvent), typeof(UIElement) },
+				null);
 			_tabControllerField = recipeBrowserUiType.GetField("tabController", anyInstance);
 			if (_tabControllerField != null)
 			{
@@ -233,6 +291,12 @@ namespace RecipeBrowserJPChatSearch
 				_recipeQueryItemField = recipeCatalogueType.GetField("queryItem", anyInstance);
 				_recipeUpdateNeededField = recipeCatalogueType.GetField("updateNeeded", anyInstance);
 				_recipeQueryReplaceMethod = recipeQueryItemType?.GetMethod("ReplaceWithFake", anyInstance, null, new[] { typeof(int) }, null);
+				_recipeCatalogueCloseButtonClickedMethod = recipeCatalogueType.GetMethod(
+					"CloseButtonClicked",
+					anyInstance,
+					null,
+					Type.EmptyTypes,
+					null);
 			}
 
 			if (itemCatalogueType != null)
@@ -254,6 +318,12 @@ namespace RecipeBrowserJPChatSearch
 				_bestiaryUpdateMethod = bestiaryType.GetMethod("Update", anyInstance, null, Type.EmptyTypes, null);
 				_bestiarySetNpcMethod = bestiaryType.GetMethod("SetNPC", anyInstance);
 				_bestiaryQueryReplaceMethod = bestiaryQueryItemType?.GetMethod("ReplaceWithFake", anyInstance, null, new[] { typeof(int) }, null);
+				_bestiaryCloseButtonClickedMethod = bestiaryType.GetMethod(
+					"CloseButtonClicked",
+					anyInstance,
+					null,
+					Type.EmptyTypes,
+					null);
 			}
 
 			if (craftUiType != null)
@@ -458,6 +528,9 @@ namespace RecipeBrowserJPChatSearch
 			if (!IsSearchHotkeyJustPressed())
 				return false;
 
+			if (IsSearchActionAlreadyConsumed())
+				return false;
+
 			int hoveredType = GetEffectiveHoveredItemType();
 			if (hoveredType <= 0)
 				return false;
@@ -484,6 +557,9 @@ namespace RecipeBrowserJPChatSearch
 			TryInitialize();
 
 			if (!IsSearchHotkeyJustPressed())
+				return false;
+
+			if (IsSearchActionAlreadyConsumed())
 				return false;
 
 			// Snapshot HoverItem first — later UI paths must not depend on a cleared field.
@@ -559,6 +635,8 @@ namespace RecipeBrowserJPChatSearch
 			// Inventory / equip / chest / bank / shop tracked by ItemSlot.MouseHover.
 			// Must run BEFORE overRb: when RB (or its tooltip region) overlaps inventory,
 			// ContainsPoint reports overRb=true and used to skip valid inv→RB clicks.
+			// MS formal transfer already ran in MiddleClickTransferPatch when it succeeded;
+			// this path only runs when that returned false.
 			if (slotHover && slotType > 0)
 			{
 				if (!Main.playerInventory)
@@ -589,7 +667,13 @@ namespace RecipeBrowserJPChatSearch
 					overRbPanel
 						? $"inv-over-rb-priority source={source} type={slotType} sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack}"
 						: $"inv source={source} type={slotType} sticky={Patches.InventoryHoverTrackPatch.UsingStickyTrack}");
-				PerformInvMsSyncedQuery(slotType);
+				Item invItem = hoverSnap != null && !hoverSnap.IsAir && hoverSnap.type == slotType
+					? hoverSnap
+					: null;
+				if (invItem != null)
+					PerformInvMsSyncedQuery(invItem);
+				else
+					PerformInvMsSyncedQuery(slotType);
 				return true;
 			}
 
@@ -619,7 +703,7 @@ namespace RecipeBrowserJPChatSearch
 				RbjDiag.Info(
 					$"Hover search-hotkey accepted source=inv-under-rb-panel type={type} → Recipe Browser (sync tabs)");
 				SearchHotkeyProbe.LogBlock("hover-ok", $"inv-under-rb-panel type={type}");
-				PerformInvMsSyncedQuery(type);
+				PerformInvMsSyncedQuery(hoverSnap);
 				return true;
 			}
 
@@ -631,7 +715,7 @@ namespace RecipeBrowserJPChatSearch
 					int type = hoverSnap.type;
 					RbjDiag.Info($"Hover search-hotkey accepted source=msHoverItemFallback type={type} → Recipe Browser (sync tabs)");
 					SearchHotkeyProbe.LogBlock("hover-ok", $"msHoverItemFallback type={type}");
-					PerformInvMsSyncedQuery(type);
+					PerformInvMsSyncedQuery(hoverSnap);
 					return true;
 				}
 
@@ -643,7 +727,7 @@ namespace RecipeBrowserJPChatSearch
 						$"Hover search-hotkey accepted source=msZoneFallback how={zoneHow} " +
 						$"type={zoneItem.type} → Recipe Browser (sync tabs)");
 					SearchHotkeyProbe.LogBlock("hover-ok", $"msZoneFallback type={zoneItem.type}");
-					PerformInvMsSyncedQuery(zoneItem.type);
+					PerformInvMsSyncedQuery(zoneItem);
 					return true;
 				}
 
@@ -734,6 +818,9 @@ namespace RecipeBrowserJPChatSearch
 					RbjDiag.Warn("PerformNpcBestiarySearch: RecipeBrowserUI.instance null");
 					return false;
 				}
+
+				if (!TryConsumeSearchActionThisFrame("NpcBestiarySearch"))
+					return false;
 
 				ShowRecipeBrowser();
 				if (!TrySetCurrentPanel(3))
@@ -847,6 +934,13 @@ namespace RecipeBrowserJPChatSearch
 		/// </summary>
 		private static bool TryHandleRecipeBrowserItemIconMiddleClick()
 		{
+			// Query slot is also a UIItemSlot — close RB instead of re-query / cascading.
+			if (TryCloseRecipeBrowserFromQuerySlotSearch())
+			{
+				SearchHotkeyProbe.LogBlock("hover-ok", "RB-query-slot:close");
+				return true;
+			}
+
 			if (!TryGetRecipeBrowserItemSlotUnderMouse(out Item item, out string how))
 				return false;
 
@@ -1359,8 +1453,25 @@ namespace RecipeBrowserJPChatSearch
 		/// <summary>
 		/// Inventory / Magic Storage → Recipe Browser:
 		/// show Recipe tab query + Item-tab name search. Does not touch Craft tab query.
+		/// <para>
+		/// If RB is currently open and the Recipe-tab query slot already holds the same item kind,
+		/// closes RB via Recipe Browser's CloseButtonClicked path (no re-send).
+		/// When RB is closed, always opens and sends — even if a stale query item remains internally.
+		/// </para>
 		/// </summary>
 		internal static void PerformInvMsSyncedQuery(int itemType, bool stickyTooltip = true)
+			=> PerformInvMsSyncedQuery(itemType, preferredItem: null, stickyTooltip);
+
+		/// <summary>Same as type overload; preferredItem improves kind matching (ModItem.FullName).</summary>
+		internal static void PerformInvMsSyncedQuery(Item preferredItem, bool stickyTooltip = true)
+		{
+			if (preferredItem == null || preferredItem.IsAir)
+				return;
+
+			PerformInvMsSyncedQuery(preferredItem.type, preferredItem, stickyTooltip);
+		}
+
+		internal static void PerformInvMsSyncedQuery(int itemType, Item preferredItem, bool stickyTooltip = true)
 		{
 			TryInitialize();
 			if (!IsReady)
@@ -1371,26 +1482,49 @@ namespace RecipeBrowserJPChatSearch
 
 			if (itemType <= 0)
 			{
-				RbjDiag.Warn("PerformInvMsSyncedQuery aborted: invalid item type");
+				RbjDiag.Warn("PerformInvMsSyncedQuery aborted: invalid itemType");
 				return;
 			}
 
-			Item tipSnap = Main.HoverItem != null && !Main.HoverItem.IsAir && Main.HoverItem.type == itemType
-				? Main.HoverItem.Clone()
-				: null;
+			bool rbBefore = GetShowRecipeBrowser();
+
+			// Case 1 only: RB must be open NOW, and query slot matches this send.
+			// Do not use last-sent history. Do not close when RB is closed (Case 3).
+			if (rbBefore)
+			{
+				Item queryItem = TryGetRecipeCatalogueQueryItem();
+				if (IsSameItemKind(queryItem, preferredItem, itemType))
+				{
+					if (!TryConsumeSearchActionThisFrame("InvMsSyncedQuery:close"))
+						return;
+
+					CloseRecipeBrowserLikeCloseButton();
+					Terraria.Audio.SoundEngine.PlaySound(SoundID.MenuClose);
+					return;
+				}
+			}
+
+			Item tipSnap = preferredItem != null && !preferredItem.IsAir && preferredItem.type == itemType
+				? preferredItem.Clone()
+				: (Main.HoverItem != null && !Main.HoverItem.IsAir && Main.HoverItem.type == itemType
+					? Main.HoverItem.Clone()
+					: null);
+
+			object recipeBrowserUi = _recipeBrowserUiInstanceField.GetValue(null);
+			if (recipeBrowserUi == null)
+			{
+				RbjDiag.Warn("PerformInvMsSyncedQuery aborted: RecipeBrowserUI.instance null");
+				return;
+			}
+
+			if (!TryConsumeSearchActionThisFrame("InvMsSyncedQuery:send"))
+				return;
 
 			MarkPendingCursorQueryClear();
 			ClearAllSearchFilters();
 
 			try
 			{
-				object recipeBrowserUi = _recipeBrowserUiInstanceField.GetValue(null);
-				if (recipeBrowserUi == null)
-				{
-					RbjDiag.Warn("PerformInvMsSyncedQuery aborted: RecipeBrowserUI.instance null");
-					return;
-				}
-
 				ShowRecipeBrowser();
 				if (!TrySetCurrentPanel(0))
 					RbjDiag.Warn("PerformInvMsSyncedQuery: SetPanel(Recipe) failed — continuing");
@@ -1407,7 +1541,7 @@ namespace RecipeBrowserJPChatSearch
 				string name = RecipeBrowserNameSearchHelper.GetSearchName(probe);
 				bool nameOk = RecipeBrowserNameSearchHelper.TrySetNameSearchOnItemTabFromItem(probe);
 
-				int recipeAfter = GetQueryItem(_recipeQueryItemField?.GetValue(_recipeCatalogueInstanceField?.GetValue(null)))?.type ?? 0;
+				int recipeAfter = TryGetRecipeCatalogueQueryItem()?.type ?? 0;
 				bool ok = recipeAfter == itemType;
 
 				RbjDiag.Info(
@@ -1416,7 +1550,7 @@ namespace RecipeBrowserJPChatSearch
 
 				if (ok)
 				{
-					Terraria.Audio.SoundEngine.PlaySound(Terraria.ID.SoundID.MenuTick);
+					Terraria.Audio.SoundEngine.PlaySound(SoundID.MenuTick);
 
 					if (stickyTooltip)
 					{
@@ -1437,6 +1571,141 @@ namespace RecipeBrowserJPChatSearch
 			finally
 			{
 				ResetPendingCursorQueryClear();
+			}
+		}
+
+		/// <summary>Recipe-tab top-left query slot Item (null if unavailable / empty).</summary>
+		private static Item TryGetRecipeCatalogueQueryItem()
+		{
+			object recipeCatalogue = _recipeCatalogueInstanceField?.GetValue(null);
+			if (recipeCatalogue == null || _recipeQueryItemField == null)
+				return null;
+
+			object querySlot = _recipeQueryItemField.GetValue(recipeCatalogue);
+			Item item = GetQueryItem(querySlot);
+			if (item == null || item.IsAir || item.type <= ItemID.None)
+				return null;
+
+			return item;
+		}
+
+		/// <summary>
+		/// True when the cursor is on the Recipe-tab query slot AND it holds a non-empty item.
+		/// Uses reference equality with <c>RecipeCatalogueUI.queryItem</c> (not type-name alone).
+		/// </summary>
+		internal static bool TryIsMouseOverRecipeCatalogueQuerySlot(out Item queryItem)
+		{
+			queryItem = null;
+			TryInitialize();
+			if (!IsReady || !GetShowRecipeBrowser())
+				return false;
+
+			object recipeCatalogue = _recipeCatalogueInstanceField?.GetValue(null);
+			if (recipeCatalogue == null || _recipeQueryItemField == null)
+				return false;
+
+			object querySlotObj = _recipeQueryItemField.GetValue(recipeCatalogue);
+			if (querySlotObj is not UIElement querySlotElement)
+				return false;
+
+			Item held = GetQueryItem(querySlotObj);
+			if (held == null || held.IsAir || held.type <= ItemID.None)
+				return false;
+
+			if (!TryGetRecipeBrowserPanelUnderMouse(out UIElement under) || under == null)
+				return false;
+
+			UIElement cur = under;
+			while (cur != null)
+			{
+				if (ReferenceEquals(cur, querySlotElement))
+				{
+					queryItem = held;
+					return true;
+				}
+
+				cur = cur.Parent;
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		/// Icon-search on the Recipe-tab query slot: close RB (do not RB→MS / re-query).
+		/// Returns true when the hotkey was consumed for this action.
+		/// </summary>
+		internal static bool TryCloseRecipeBrowserFromQuerySlotSearch()
+		{
+			if (!TryIsMouseOverRecipeCatalogueQuerySlot(out Item queryItem))
+				return false;
+
+			if (!TryConsumeSearchActionThisFrame("RB-query-slot:close"))
+				return true; // already consumed this press — still block other paths
+
+			CloseRecipeBrowserLikeCloseButton();
+			Terraria.Audio.SoundEngine.PlaySound(SoundID.MenuClose);
+			RbjDiag.Info(
+				$"RB query-slot icon-search → close type={queryItem.type} " +
+				$"name='{Lang.GetItemNameValue(queryItem.type)}'");
+			return true;
+		}
+
+		/// <summary>
+		/// Kind equality: Item.type first; if both have ModItem, also require FullName.
+		/// Never compares display names. Never uses reference equality alone.
+		/// </summary>
+		private static bool IsSameItemKind(Item querySlotItem, Item operatedItem, int operatedType)
+		{
+			if (querySlotItem == null || querySlotItem.IsAir || querySlotItem.type <= ItemID.None)
+				return false;
+			if (operatedType <= ItemID.None)
+				return false;
+			if (querySlotItem.type != operatedType)
+				return false;
+
+			if (operatedItem != null && !operatedItem.IsAir)
+			{
+				if (operatedItem.type != operatedType)
+					return false;
+
+				if (querySlotItem.ModItem != null && operatedItem.ModItem != null)
+					return querySlotItem.ModItem.FullName == operatedItem.ModItem.FullName;
+			}
+
+			return true;
+		}
+
+		/// <summary>
+		/// Same cleanup as RecipeBrowserUI close (X) button, but force-close (never toggle).
+		/// Official CloseButtonClicked toggles ShowRecipeBrowser — a second call would reopen.
+		/// </summary>
+		internal static void CloseRecipeBrowserLikeCloseButton()
+		{
+			object recipeBrowserUi = _recipeBrowserUiInstanceField?.GetValue(null);
+			if (recipeBrowserUi == null)
+				return;
+
+			try
+			{
+				// Force false first so a duplicate close cannot toggle back open.
+				SetShowRecipeBrowser(recipeBrowserUi, false);
+
+				object catalogue = _recipeCatalogueInstanceField?.GetValue(null);
+				_recipeCatalogueCloseButtonClickedMethod?.Invoke(catalogue, null);
+				object bestiary = _bestiaryInstanceField?.GetValue(null);
+				_bestiaryCloseButtonClickedMethod?.Invoke(bestiary, null);
+			}
+			catch (Exception ex)
+			{
+				RbjDiag.Error("CloseRecipeBrowserLikeCloseButton failed", ex);
+				try
+				{
+					SetShowRecipeBrowser(recipeBrowserUi, false);
+				}
+				catch
+				{
+					// ignore
+				}
 			}
 		}
 
@@ -1463,31 +1732,35 @@ namespace RecipeBrowserJPChatSearch
 				return;
 			}
 
+			bool rbBefore = GetShowRecipeBrowser();
+
 			// Snapshot tip BEFORE ReplaceWithFake / UI rebuild can clear HoverItem.
 			Item tipSnap = Main.HoverItem != null && !Main.HoverItem.IsAir && Main.HoverItem.type == hoveredType
 				? Main.HoverItem.Clone()
 				: null;
+
+			object recipeBrowserUi = _recipeBrowserUiInstanceField.GetValue(null);
+			if (recipeBrowserUi == null)
+			{
+				RbjDiag.Warn("PerformHoveredItemQuery aborted: RecipeBrowserUI.instance null");
+				return;
+			}
+
+			if (!TryGetUiState(out _, out int currentPanel))
+			{
+				RbjDiag.Warn("PerformHoveredItemQuery aborted: TryGetUiState failed");
+				return;
+			}
+
+			if (!TryConsumeSearchActionThisFrame("HoveredItemQuery"))
+				return;
 
 			MarkPendingCursorQueryClear();
 			ClearAllSearchFilters();
 
 			try
 			{
-				object recipeBrowserUi = _recipeBrowserUiInstanceField.GetValue(null);
-				if (recipeBrowserUi == null)
-				{
-					RbjDiag.Warn("PerformHoveredItemQuery aborted: RecipeBrowserUI.instance null");
-					return;
-				}
-
-				if (!TryGetUiState(out _, out int currentPanel))
-				{
-					RbjDiag.Warn("PerformHoveredItemQuery aborted: TryGetUiState failed");
-					return;
-				}
-
-				bool showBefore = GetShowRecipeBrowser();
-				RbjDiag.Info($"PerformHoveredItemQuery begin type={hoveredType} panel={currentPanel} showBefore={showBefore} toggleClose={allowToggleClose}");
+				RbjDiag.Info($"PerformHoveredItemQuery begin type={hoveredType} panel={currentPanel} showBefore={rbBefore} toggleClose={allowToggleClose}");
 
 				bool showRecipeBrowser = true;
 				int targetPanel = currentPanel;

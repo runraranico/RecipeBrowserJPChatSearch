@@ -81,6 +81,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (!RecipeBrowserCursorSearchBridge.IsSearchHotkeyJustPressed())
 				return false;
 
+			if (RecipeBrowserCursorSearchBridge.IsSearchActionAlreadyConsumed())
+				return false;
+
 			// Snapshot before anything else touches HoverItem.
 			Item hoverSnap = CloneHoverItemOrNull();
 			int snapType = hoverSnap?.type ?? 0;
@@ -117,6 +120,13 @@ namespace RecipeBrowserJPChatSearch.Patches
 			RbjDiag.Info(
 				$"TransferAttempt begin snapType={snapType} overRb={overRb} overRbItem={overRbItem} " +
 				$"overMs={overMs} msOpen={msOpen} hoverAir={hoverSnap == null}");
+
+			// Recipe-tab query slot: icon-search closes RB (never RB→MS).
+			if (RecipeBrowserCursorSearchBridge.TryCloseRecipeBrowserFromQuerySlotSearch())
+			{
+				SearchHotkeyProbe.LogBlock("transfer-ok", "RB-query-slot:close");
+				return true;
+			}
 
 			// RB→MS only when cursor is on an RB item icon (not panel chrome overlapping inventory).
 			if (overRbItem && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow, out Item rbItem))
@@ -199,6 +209,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (uiKind == MagicStorageUiKind.Storage)
 			{
 				RbjDiag.Info("Action=SetStorageSearch");
+				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:Storage"))
+					return false;
+
 				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
 				{
 					RbjDiag.Info("SetSearchSuccess=false reason=storage-search-fail");
@@ -215,6 +228,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (uiKind == MagicStorageUiKind.Crafting)
 			{
 				RbjDiag.Info("Action=SetCraftingSearch+SelectRecipe");
+				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:Crafting"))
+					return false;
+
 				if (!MagicStorageSearchHelper.TrySetSearchFromItemAndSelectCraftRecipe(item, preferredRecipe))
 				{
 					RbjDiag.Info("SetSearchSuccess=false reason=crafting-search-fail");
@@ -230,6 +246,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			// No MS UI open → Crafting Access only (never auto-open Heart / Storage Access / Remote).
 			RbjDiag.Info("Action=OpenNearestCraftingAccessThenSearch");
+			if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:OpenCraft"))
+				return false;
+
 			if (!MagicStorageCraftingAccessHelper.TryOpenNearestCraftingAccessAndSetSearch(
 					item, preferredRecipe, out string failReason))
 			{

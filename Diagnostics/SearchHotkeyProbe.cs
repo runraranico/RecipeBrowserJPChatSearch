@@ -2,11 +2,12 @@ using System;
 using System.Reflection;
 using System.Text;
 using Microsoft.Xna.Framework;
+using RecipeBrowserJPChatSearch.Patches;
 using Terraria;
 using Terraria.ModLoader;
 using Terraria.UI;
 
-namespace RecipeBrowserJPChatSearch.Patches
+namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
 	/// One searchable block in client.log / RBJ_Debug when the search hotkey fires.

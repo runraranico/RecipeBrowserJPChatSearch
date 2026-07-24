@@ -98,7 +98,10 @@ namespace RecipeBrowserJPChatSearch
 		/// </summary>
 		private void PostDrawInterfaceWhileChatting()
 		{
-			var sw = System.Diagnostics.Stopwatch.StartNew();
+			System.Diagnostics.Stopwatch sw = null;
+			if (RbjDiag.Enabled)
+				sw = System.Diagnostics.Stopwatch.StartNew();
+
 			try
 			{
 				RecipeBrowserCursorSearchBridge.TryInitialize();
@@ -129,9 +132,12 @@ namespace RecipeBrowserJPChatSearch
 			}
 			finally
 			{
-				sw.Stop();
-				ChatComposePerf.AddPostDrawMicros(ChatComposePerf.ElapsedMicros(sw));
-				ChatComposePerf.EndChatFrame();
+				if (sw != null)
+				{
+					sw.Stop();
+					ChatComposePerf.AddPostDrawMicros(ChatComposePerf.ElapsedMicros(sw));
+					ChatComposePerf.EndChatFrame();
+				}
 			}
 		}
 
@@ -147,7 +153,7 @@ namespace RecipeBrowserJPChatSearch
 			ChatBrowseHelper.DrawHistoryOverlay();
 
 			bool hotkey = RecipeBrowserCursorSearchBridge.IsSearchHotkeyJustPressed();
-			if (hotkey)
+			if (hotkey && RbjDiag.Enabled)
 			{
 				RbjRenderHealth.MarkWithSnap(
 					$"search-hotkey edge inv={Main.playerInventory} " +

@@ -24,6 +24,9 @@ namespace RecipeBrowserJPChatSearch
 
 		internal static void Arm(string trigger)
 		{
+			if (!RbjDiag.Enabled)
+				return;
+
 			_untilTick = Environment.TickCount64 + CaptureMs;
 			_lines = 0;
 			_trigger = trigger ?? string.Empty;

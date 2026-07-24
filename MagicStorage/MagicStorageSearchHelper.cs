@@ -1200,7 +1200,7 @@ namespace RecipeBrowserJPChatSearch
 
 			Microsoft.Xna.Framework.Vector2 mouse = new(Main.mouseX, Main.mouseY);
 			UIElement under = root.GetElementAt(mouse);
-			if (Patches.SearchHotkeyProbe.TryResolveMsItem(under, out item, out how))
+			if (SearchHotkeyProbe.TryResolveMsItem(under, out item, out how))
 				return true;
 
 			if (TryGetItemFromHoveredSlotZone(out item, out how))
@@ -1275,7 +1275,7 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 
 			if (el.GetType().Name == "NewUISlotZone"
-				&& Patches.SearchHotkeyProbe.TryResolveMsItem(el, out item, out how)
+				&& SearchHotkeyProbe.TryResolveMsItem(el, out item, out how)
 				&& item != null
 				&& !item.IsAir)
 				return true;
