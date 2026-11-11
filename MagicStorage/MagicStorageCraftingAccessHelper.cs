@@ -12,7 +12,8 @@ namespace RecipeBrowserJPChatSearch
 	{
 		None,
 		Storage,
-		Crafting
+		Crafting,
+		Other
 	}
 
 	/// <summary>
@@ -29,17 +30,22 @@ namespace RecipeBrowserJPChatSearch
 		private static MethodInfo _openStorageMethod;
 
 		private static Item _pendingItem;
+		private static string _pendingSearchText;
 		private static Recipe _pendingPreferredRecipe;
 		private static int _pendingFramesLeft;
 		private static Point16 _pendingTile = Point16.NegativeOne;
 
 		internal static MagicStorageUiKind GetCurrentUiKind()
 		{
-			if (!ModLoader.HasMod("MagicStorage") || !MagicStorageSearchHelper.EnsureReflectionPublic())
+			if (!ModLoader.HasMod("MagicStorage"))
 				return MagicStorageUiKind.None;
 
 			try
 			{
+				if (!MagicStorageSearchHelper.TryGetCurrentUi(out var ui))
+					return MagicStorageUiKind.Other;
+				if (ui == null)
+					return MagicStorageUiKind.None;
 				if (MagicStorageSearchHelper.IsCraftingUiOpen())
 					return MagicStorageUiKind.Crafting;
 				if (MagicStorageSearchHelper.IsStorageUiOpen())
@@ -50,20 +56,16 @@ namespace RecipeBrowserJPChatSearch
 				RbjDiag.Error("GetCurrentUiKind failed", ex);
 			}
 
-			return MagicStorageUiKind.None;
+			return MagicStorageUiKind.Other;
 		}
 
 		internal static string UiKindLabel(MagicStorageUiKind kind) => kind switch
 		{
 			MagicStorageUiKind.Storage => "StorageAccess",
 			MagicStorageUiKind.Crafting => "CraftingAccess",
+			MagicStorageUiKind.Other => "OtherStorageUI",
 			_ => "None"
 		};
-
-		internal static bool TryOpenNearestCraftingAccessAndSetSearch(
-			Item item,
-			out string failReason)
-			=> TryOpenNearestCraftingAccessAndSetSearch(item, preferredRecipe: null, out failReason);
 
 		/// <summary>
 		/// Finds reachable Crafting Access TEs, opens the nearest via Magic Storage's OpenStorage path,
@@ -137,6 +139,12 @@ namespace RecipeBrowserJPChatSearch
 		/// <summary>Cheap: only runs while a pending post-open search is armed.</summary>
 		internal static void TickPendingSearch()
 		{
+			if (_pendingSearchText != null)
+			{
+				TickPendingTextSearch();
+				return;
+			}
+
 			if (_pendingItem == null || _pendingFramesLeft <= 0)
 			{
 				if (_pendingItem != null)
@@ -173,10 +181,67 @@ namespace RecipeBrowserJPChatSearch
 
 		internal static void ClearPending()
 		{
+			_pendingSearchText = null;
 			_pendingItem = null;
 			_pendingPreferredRecipe = null;
 			_pendingFramesLeft = 0;
 			_pendingTile = Point16.NegativeOne;
+		}
+
+		internal static bool TryOpenNearestCraftingAccessAndSetSearchText(string searchText, out string failReason)
+		{
+			failReason = string.Empty;
+			ClearPending();
+			if (string.IsNullOrWhiteSpace(searchText))
+			{
+				failReason = "empty-name";
+				return false;
+			}
+			if (!ModLoader.HasMod("MagicStorage") || !EnsureReflection())
+			{
+				failReason = "reflect-fail";
+				return false;
+			}
+			Player player = Main.LocalPlayer;
+			if (player == null || !player.active)
+			{
+				failReason = "no-player";
+				return false;
+			}
+			if (!TryFindNearestReachableCraftingAccess(player, out Point16 selected, out int count))
+			{
+				failReason = count == 0 ? "no-candidates" : "none-reachable";
+				return false;
+			}
+			if (!TryOpenCraftingAccessAt(player, selected))
+			{
+				failReason = "open-failed";
+				return false;
+			}
+			if (MagicStorageSearchHelper.IsCraftingUiOpen() && MagicStorageSearchHelper.TrySetSearch(searchText))
+				return true;
+			_pendingSearchText = searchText;
+			_pendingFramesLeft = PendingSearchMaxFrames;
+			_pendingTile = selected;
+			return true;
+		}
+
+		private static void TickPendingTextSearch()
+		{
+			if (_pendingFramesLeft <= 0)
+			{
+				ClearPending();
+				return;
+			}
+			_pendingFramesLeft--;
+			if (!MagicStorageSearchHelper.IsCraftingUiOpen())
+			{
+				if (_pendingFramesLeft == 0)
+					ClearPending();
+				return;
+			}
+			MagicStorageSearchHelper.TrySetSearch(_pendingSearchText);
+			ClearPending();
 		}
 
 		private static bool TryFindNearestReachableCraftingAccess(

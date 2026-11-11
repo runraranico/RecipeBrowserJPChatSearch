@@ -106,11 +106,12 @@ namespace RecipeBrowserJPChatSearch
 			{
 				RecipeBrowserCursorSearchBridge.TryInitialize();
 
-				bool hotkey = RecipeBrowserCursorSearchBridge.IsSearchHotkeyJustPressed();
+				bool hotkey = ChatSnippetSearchPatch.IsSearchHotkeyJustPressed();
 				bool handled = false;
 				if (hotkey)
 				{
-					handled = MiddleClickTransferPatch.TryHandleSearchHotkeyTransfer()
+					handled = ChatSnippetSearchPatch.TryHandleSearch()
+						|| MiddleClickTransferPatch.TryHandleSearchHotkeyTransfer()
 						|| RecipeBrowserCursorSearchBridge.TryHandleHoverItemMiddleClickQuery();
 				}
 
@@ -150,9 +151,14 @@ namespace RecipeBrowserJPChatSearch
 			MagicStorageCraftingAccessHelper.TickPendingSearch();
 			MagicStorageSearchHelper.TickPendingCraftRecipeSelect();
 
-			ChatBrowseHelper.DrawHistoryOverlay();
-
-			bool hotkey = RecipeBrowserCursorSearchBridge.IsSearchHotkeyJustPressed();
+			bool hotkey = ChatSnippetSearchPatch.IsSearchHotkeyJustPressed();
+			bool captureChat = hotkey && ChatBrowseHelper.IsDisplayingOverlay && ChatSnippetSearchPatch.BeginCapture();
+			try { ChatBrowseHelper.DrawHistoryOverlay(); }
+			finally
+			{
+				if (captureChat)
+					ChatSnippetSearchPatch.EndCapture(ChatBrowseHelper.IsDisplayingOverlay);
+			}
 			if (hotkey && RbjDiag.Enabled)
 			{
 				RbjRenderHealth.MarkWithSnap(
@@ -178,7 +184,11 @@ namespace RecipeBrowserJPChatSearch
 			}
 
 			bool handled = false;
-			if (ChatBrowseHelper.BrowseMode)
+			if (hotkey && ChatSnippetSearchPatch.TryHandleSearch())
+			{
+				handled = true;
+			}
+			else if (ChatBrowseHelper.BrowseMode)
 			{
 				handled = RecipeBrowserCursorSearchBridge.TryHandleChatCursorSearch();
 			}

@@ -7,3 +7,5 @@ obj/
 debug/
 *.tmod
 *.zip
+_developer/
+AGENTS.md

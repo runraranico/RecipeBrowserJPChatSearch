@@ -88,7 +88,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 					_lastChatText = shortened;
 					RbjDiag.Info($"ChatComposeTagShortener buffer {text.Length}→{shortened.Length}");
 					RbjRenderHealth.Mark($"shorten {text.Length}→{shortened.Length}");
-					ChatParseMessageCache.Invalidate();
 				}
 				else
 				{

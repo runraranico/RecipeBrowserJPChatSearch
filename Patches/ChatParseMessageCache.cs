@@ -53,11 +53,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 			RbjDiag.Info("ChatParseMessageCache hooked ParseMessage (passthrough; no shared cache)");
 		}
 
-		internal static void Invalidate()
-		{
-			// No cached entries while disabled.
-		}
-
 		internal static string SnapshotStats()
 			=> $"parseCache=disabled composeCalls={_callsWhileComposing}";
 	}

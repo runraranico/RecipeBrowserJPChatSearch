@@ -5,5 +5,12 @@
     <AssemblyName>RecipeBrowserJPChatSearch</AssemblyName>
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>latest</LangVersion>
+    <DefaultItemExcludes>$(DefaultItemExcludes);_developer/**</DefaultItemExcludes>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="_developer/**/*.cs" />
+    <AdditionalFiles Remove="_developer/**/*" />
+    <EmbeddedResource Remove="_developer/**/*" />
+    <None Remove="_developer/**/*" />
+  </ItemGroup>
 </Project>

@@ -11,7 +11,7 @@ using Terraria.UI;
 namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
-	/// Writes text into the open Magic Storage search bar (crafting station or storage heart).
+	/// Writes text into the current Magic Storage search bar (including Shimmer).
 	/// On crafting UI, also best-effort switches to Filter All + RecipeAll before searching,
 	/// then (after list refresh) selects a recipe like a craft-zone left-click:
 	/// first craftable match, else leftmost match.
@@ -27,6 +27,7 @@ namespace RecipeBrowserJPChatSearch
 		private static Type _magicUiType;
 		private static MethodInfo _isCraftingOpen;
 		private static MethodInfo _isStorageOpen;
+		private static FieldInfo _uiInterfaceField;
 		private static FieldInfo _craftingUiField;
 		private static FieldInfo _storageUiField;
 		private static MethodInfo _getDefaultPage;
@@ -108,28 +109,15 @@ namespace RecipeBrowserJPChatSearch
 
 			try
 			{
-				object ui = null;
-				bool isCrafting = false;
-				if (_isCraftingOpen.Invoke(null, null) is true)
-				{
-					ui = _craftingUiField.GetValue(null);
-					isCrafting = true;
-				}
-				else if (_isStorageOpen.Invoke(null, null) is true)
-				{
-					ui = _storageUiField.GetValue(null);
-				}
-
-				if (ui == null)
-				{
-					RbjDiag.Warn("TrySetSearch: no open crafting/storage UI");
+				if (!TryGetUiRoot(out UIElement ui))
 					return false;
-				}
-
+				bool isCrafting = IsCraftingUiOpen();
+				if (_getDefaultPage.DeclaringType?.IsInstanceOfType(ui) != true)
+					return false;
 				object page = _getDefaultPage.Invoke(ui, null);
-				if (page == null)
+				if (page == null || _searchBarField.DeclaringType?.IsInstanceOfType(page) != true)
 				{
-					RbjDiag.Warn("TrySetSearch: GetDefaultPage returned null");
+					RbjDiag.Warn("TrySetSearch: current UI has no searchable default page");
 					return false;
 				}
 
@@ -187,6 +175,12 @@ namespace RecipeBrowserJPChatSearch
 			_pendingCraftSelectFramesLeft = 0;
 			_pendingCraftSelectMinWaitLeft = 0;
 			_pendingPreferredRecipe = null;
+		}
+
+		internal static void CancelPendingCraftSearches()
+		{
+			ClearPendingCraftRecipeSelect();
+			MagicStorageCraftingAccessHelper.ClearPending();
 		}
 
 		/// <summary>Cheap: only while a pending craft-recipe select is armed.</summary>
@@ -1101,21 +1095,7 @@ namespace RecipeBrowserJPChatSearch
 			}
 		}
 
-		internal static bool IsAnyTargetUiOpen()
-		{
-			if (!ModLoader.HasMod("MagicStorage") || !EnsureReflection())
-				return false;
-
-			try
-			{
-				return IsCraftingUiOpen() || IsStorageUiOpen();
-			}
-			catch (Exception ex)
-			{
-				RbjDiag.Error("IsAnyTargetUiOpen failed", ex);
-				return false;
-			}
-		}
+		internal static bool IsAnyTargetUiOpen() => TryGetUiRoot(out _);
 
 		internal static bool IsCraftingUiOpen()
 		{
@@ -1148,9 +1128,6 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 			}
 		}
-
-		/// <summary>Shared by Crafting Access opener (cached reflection).</summary>
-		internal static bool EnsureReflectionPublic() => EnsureReflection();
 
 		/// <summary>
 		/// True when the cursor is over a Magic Storage item slot / slot grid
@@ -1290,32 +1267,43 @@ namespace RecipeBrowserJPChatSearch
 			return false;
 		}
 
-		internal static bool TryGetUiRoot(out UIElement root)
+		internal static bool TryGetCurrentUi(out UIElement root)
 		{
 			root = null;
-			if (!ModLoader.HasMod("MagicStorage") || !EnsureReflection())
-				return false;
+			if (!ModLoader.HasMod("MagicStorage"))
+				return true;
 
+			// Resolve the interface even if optional search-widget reflection failed.
+			EnsureReflection();
 			try
 			{
-				object ui = null;
-				if (_isCraftingOpen.Invoke(null, null) is true)
-					ui = _craftingUiField.GetValue(null);
-				else if (_isStorageOpen.Invoke(null, null) is true)
-					ui = _storageUiField.GetValue(null);
+				if (_uiInterfaceField != null)
+				{
+					if (_uiInterfaceField.GetValue(null) is not UserInterface uiInterface)
+						return false;
+					root = uiInterface.CurrentState;
+					return true; // A readable interface with no current state is confirmed closed.
+				}
 
+				// Older versions: retain known-open UIs, but never infer closed from missing API.
+				object ui = null;
+				if (_isCraftingOpen?.Invoke(null, null) is true)
+					ui = _craftingUiField?.GetValue(null);
+				else if (_isStorageOpen?.Invoke(null, null) is true)
+					ui = _storageUiField?.GetValue(null);
 				if (ui is not UIElement element)
 					return false;
-
 				root = element;
 				return true;
 			}
-			catch (Exception ex)
+			catch
 			{
-				RbjDiag.Error("TryGetUiRoot failed", ex);
-				return false;
+				return false; // Unknown is not closed; do not switch UIs or add recurring logs.
 			}
 		}
+
+		internal static bool TryGetUiRoot(out UIElement root)
+			=> TryGetCurrentUi(out root) && root != null;
 
 		private static bool EnsureReflection()
 		{
@@ -1345,6 +1333,7 @@ namespace RecipeBrowserJPChatSearch
 
 				_isCraftingOpen = _magicUiType.GetMethod("IsCraftingUIOpen", staticFlags);
 				_isStorageOpen = _magicUiType.GetMethod("IsStorageUIOpen", staticFlags);
+				_uiInterfaceField = _magicUiType.GetField("uiInterface", staticFlags);
 				_craftingUiField = _magicUiType.GetField("craftingUI", staticFlags);
 				_storageUiField = _magicUiType.GetField("storageUI", staticFlags);
 				// Prefer StorageGUI.SetRefresh when available (resolved in EnsureCraftSelectReflection).
@@ -1431,6 +1420,7 @@ namespace RecipeBrowserJPChatSearch
 			_magicUiType = null;
 			_isCraftingOpen = null;
 			_isStorageOpen = null;
+			_uiInterfaceField = null;
 			_craftingUiField = null;
 			_storageUiField = null;
 			_getDefaultPage = null;

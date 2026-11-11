@@ -32,6 +32,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 		public static void Apply(Mod magicStorageMod, Mod recipeBrowserMod)
 		{
+			RequiredObjectSearch.Initialize(recipeBrowserMod);
 			if (magicStorageMod != null)
 			{
 				_msSlotType = magicStorageMod.Code.GetType("MagicStorage.UI.MagicStorageItemSlot");
@@ -65,6 +66,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 		internal static void Unload()
 		{
+			RequiredObjectSearch.Unload();
 			_msSlotType = null;
 			_msStoredItemProperty = null;
 			_rbItemSlotType = null;
@@ -129,6 +131,9 @@ namespace RecipeBrowserJPChatSearch.Patches
 			}
 
 			// RB→MS only when cursor is on an RB item icon (not panel chrome overlapping inventory).
+			if (!overRbItem && RequiredObjectSearch.TryHandleHoveredRequiredObject())
+				return true;
+
 			if (overRbItem && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow, out Item rbItem))
 			{
 				if (rbItem != null && !rbItem.IsAir)
@@ -244,6 +249,17 @@ namespace RecipeBrowserJPChatSearch.Patches
 				return true;
 			}
 
+			if (uiKind != MagicStorageUiKind.None)
+			{
+				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:OtherUI"))
+					return false;
+				MagicStorageSearchHelper.CancelPendingCraftSearches();
+				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
+					return false;
+				SoundEngine.PlaySound(SoundID.MenuTick);
+				transferred = item;
+				return true;
+			}
 			// No MS UI open → Crafting Access only (never auto-open Heart / Storage Access / Remote).
 			RbjDiag.Info("Action=OpenNearestCraftingAccessThenSearch");
 			if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:OpenCraft"))

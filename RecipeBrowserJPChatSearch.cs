@@ -40,6 +40,7 @@ namespace RecipeBrowserJPChatSearch
 				RecipeBrowserFilterPatches.Apply(recipeBrowser);
 				RecipeBrowserUnfocusPatch.Apply(recipeBrowser);
 				ItemHoverFixTagHandlerPatch.Apply(recipeBrowser);
+				ChatSnippetSearchPatch.Apply(recipeBrowser);
 				RecipeBrowserCursorQueryClearPatch.Apply(recipeBrowser);
 				RecipeBrowserCursorSearchPatch.Apply(recipeBrowser);
 				RecipeBrowserPatches.Apply(recipeBrowser);
@@ -73,6 +74,7 @@ namespace RecipeBrowserJPChatSearch
 		public override void Unload()
 		{
 			RbjDiagPolicy.LogSessionSummary("Unload");
+			ChatSnippetSearchPatch.Unload();
 			MiddleClickTransferPatch.Unload();
 			MagicStorageSearchHelper.Unload();
 			MagicStorageCraftingAccessHelper.Unload();

@@ -163,7 +163,8 @@ namespace RecipeBrowserJPChatSearch
 
 		private static void TickSearchActionReleaseGate()
 		{
-			if (_searchActionAwaitingRelease && !IsSearchHotkeyHeld())
+			if (_searchActionAwaitingRelease && !IsSearchHotkeyHeld()
+				&& !Patches.ChatSnippetSearchPatch.IsCapturedComposeKeyHeld())
 				_searchActionAwaitingRelease = false;
 		}
 
@@ -775,7 +776,7 @@ namespace RecipeBrowserJPChatSearch
 
 			// Placed tiles — never while a UI owns the mouse (RB query slot etc.)
 			// No sticky HoverHold: wrong world picks must not glue tooltips for 700ms.
-			if (!mouseOnUi
+			if (rbOpen && !mouseOnUi
 				&& WorldPlacedItemHover.TryGetItemUnderMouse(out int placedType, out string placedSource)
 				&& placedType > 0)
 			{
@@ -798,7 +799,7 @@ namespace RecipeBrowserJPChatSearch
 		/// Opens Recipe Browser Bestiary, clears item-query slot, selects the NPC
 		/// (same idea as RB's double-click on an NPC slot).
 		/// </summary>
-		internal static bool PerformNpcBestiarySearch(int npcType, int npcNetId = 0)
+		internal static bool PerformNpcBestiarySearch(int npcType, int npcNetId = 0, string npcNameOverride = null)
 		{
 			TryInitialize();
 			if (!IsReady)
@@ -849,7 +850,7 @@ namespace RecipeBrowserJPChatSearch
 					RbjDiag.Error("PerformNpcBestiarySearch: clear query item failed", ex);
 				}
 
-				string npcName = Lang.GetNPCNameValue(npcNetId);
+				string npcName = npcNameOverride ?? Lang.GetNPCNameValue(npcNetId);
 				object nameFilter = _bestiaryNameFilterField?.GetValue(bestiary);
 				if (nameFilter != null && !string.IsNullOrWhiteSpace(npcName))
 					WriteNameFilter(nameFilter, npcName);

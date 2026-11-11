@@ -163,9 +163,6 @@ namespace RecipeBrowserJPChatSearch
 		internal static void RestoreMouse(MouseSnap snap, bool logIfChanged, string reason)
 			=> RestoreMouse(snap.MainX, snap.MainY, snap.InputX, snap.InputY, logIfChanged, reason);
 
-		internal static void RestoreMouse(int mainX, int mainY, int inputX, int inputY)
-			=> RestoreMouse(mainX, mainY, inputX, inputY, logIfChanged: false, reason: null);
-
 		internal static void RestoreMouse(
 			int mainX,
 			int mainY,

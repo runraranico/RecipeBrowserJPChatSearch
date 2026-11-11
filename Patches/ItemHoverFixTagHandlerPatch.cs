@@ -39,7 +39,11 @@ namespace RecipeBrowserJPChatSearch.Patches
 			MonoModHooks.Add(onHover, (orig_OnHover orig, object self) =>
 			{
 				if (_itemField.GetValue(self) is Item item && !item.IsAir)
+				{
 					RecipeBrowserCursorSearchBridge.RememberHoveredItem(item.type);
+					if (ChatSnippetSearchPatch.Capturing)
+						ChatSnippetSearchPatch.CaptureItem(item.type);
+				}
 
 				if (RbjDiag.Enabled)
 					ChatComposePerf.NoteRbOnHover(skippedHeavy: false);

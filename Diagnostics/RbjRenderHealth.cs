@@ -103,7 +103,6 @@ namespace RecipeBrowserJPChatSearch
 
 		internal static void OnChatClosed()
 		{
-			Patches.ChatParseMessageCache.Invalidate();
 			Mark("chat-closed");
 			RbjDiag.Info("RbjRenderHealth chat-closed → parse-cache invalidate");
 		}
