@@ -19,8 +19,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 		private delegate void orig_DrawSelf(object self, SpriteBatch spriteBatch);
 		private delegate string orig_GetInputText(string oldString, bool allowMultiLine);
 
-		private static orig_GetInputText _origGetInputText;
-
 		private static Type _textBoxType;
 		private static FieldInfo _focusedField;
 		private static FieldInfo _currentStringField;
@@ -31,6 +29,15 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 		private static object _activeBox;
 		private static bool _suppressVanillaInput;
+
+		internal static void Unload()
+		{
+			_activeBox = null;
+			_suppressVanillaInput = false;
+			_textBoxType = null;
+			_focusedField = _currentStringField = _maxLengthField = null;
+			_setTextMethod = _unfocusMethod = _getDimensionsMethod = null;
+		}
 
 		public static void Apply(Mod recipeBrowserMod)
 		{
@@ -47,8 +54,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			MonoModHooks.Add(typeof(Main).GetMethod(nameof(Main.GetInputText), BindingFlags.Static | BindingFlags.Public), (orig_GetInputText orig, string oldString, bool allowMultiLine) =>
 			{
-				_origGetInputText ??= orig;
-
 				if (_suppressVanillaInput && _activeBox != null)
 					return oldString;
 

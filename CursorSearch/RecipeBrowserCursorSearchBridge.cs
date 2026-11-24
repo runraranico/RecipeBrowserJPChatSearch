@@ -29,6 +29,8 @@ namespace RecipeBrowserJPChatSearch
 		private static FieldInfo _favoritePanelField;
 		private static bool _initFailLogged;
 		private static FieldInfo _recipeCatalogueInstanceField;
+		private static FieldInfo _recipeResultGridField;
+		private static RecipeCatalogueDetails _recipeDetails;
 		private static FieldInfo _itemCatalogueInstanceField;
 		private static FieldInfo _bestiaryInstanceField;
 		private static FieldInfo _craftInstanceField;
@@ -67,6 +69,8 @@ namespace RecipeBrowserJPChatSearch
 		private static int _lastHoveredItemStickyTtl;
 		private const int HoverItemStickyFrames = 30;
 		private static bool _pendingCursorQueryClear;
+
+		internal static bool HasPendingCursorQueryClear => _pendingCursorQueryClear;
 
 		internal static void MarkPendingCursorQueryClear() => _pendingCursorQueryClear = true;
 
@@ -176,10 +180,26 @@ namespace RecipeBrowserJPChatSearch
 			_initFailLogged = false;
 			_recipeBrowserMod = null;
 			_queryHoveredItemHotKey = null;
+			_recipeDetails = null;
+			_recipeResultGridField = null;
+			_setTextMethod = _unfocusMethod = null;
+			_focusedField = _currentStringField = _recipeBrowserUiInstanceField = null;
 			_recipeBrowserShowProperty = null;
 			_recipeBrowserShowField = null;
+			_recipeBrowserCurrentPanelField = null;
+			_recipeBrowserCurrentPanelProperty = _keybindBindingsProperty = null;
 			_mainPanelField = null;
 			_favoritePanelField = null;
+			_recipeCatalogueInstanceField = _itemCatalogueInstanceField = _bestiaryInstanceField = _craftInstanceField = null;
+			_recipeNameFilterField = _recipeDescriptionFilterField = _itemNameFilterField = _itemDescriptionFilterField = null;
+			_bestiaryNameFilterField = _recipeUpdateNeededField = _recipeQueryItemField = _bestiaryQueryItemField = null;
+			_craftRecipeResultSlotField = _tabControllerField = _bestiaryUpdateNeededField = _bestiaryNpcSlotsField = null;
+			_bestiaryQueryLootNpcField = _bestiaryNpcGridField = _rbNpcSlotNpcTypeField = _rbNpcSlotNpcField = _rbItemSlotItemField = null;
+			_recipeQueryReplaceMethod = _craftSetItemMethod = _bestiaryQueryReplaceMethod = null;
+			_recipeBrowserCloseButtonClickedMethod = _recipeCatalogueCloseButtonClickedMethod = _bestiaryCloseButtonClickedMethod = null;
+			_tabControllerSetPanelMethod = _bestiaryUpdateMethod = _bestiarySetNpcMethod = _npcGridGotoMethod = null;
+			_rbNpcSlotType = _rbItemSlotType = null;
+			ResetPendingCursorQueryClear();
 			_lastHoveredItemType = 0;
 			_itemFieldCache.Clear();
 			_rbUnderMouseCacheFrame = uint.MaxValue;
@@ -287,6 +307,8 @@ namespace RecipeBrowserJPChatSearch
 			if (recipeCatalogueType != null)
 			{
 				_recipeCatalogueInstanceField = recipeCatalogueType.GetField("instance", anyStatic);
+				_recipeResultGridField = recipeCatalogueType.GetField("recipeGrid", anyInstance);
+				_recipeDetails = RecipeCatalogueDetails.TryCreate(recipeCatalogueType);
 				_recipeNameFilterField = recipeCatalogueType.GetField("itemNameFilter", anyInstance);
 				_recipeDescriptionFilterField = recipeCatalogueType.GetField("itemDescriptionFilter", anyInstance);
 				_recipeQueryItemField = recipeCatalogueType.GetField("queryItem", anyInstance);
@@ -547,9 +569,7 @@ namespace RecipeBrowserJPChatSearch
 		/// Search hotkey (default: physical middle-click):
 		/// 1) inventory / shop / chest / bank slots
 		/// 2) any Main.HoverItem icon (chat tags, tooltips, etc.)
-		/// 3) NPC: only while Recipe Browser is open —
-		///    C = bestiary UINPCSlot; B = SmartInteract / talkNPC;
-		///    enemy = tip + name-hover (ShowNameOnHover). Closed RB → no world NPC (A).
+		/// 3) World NPC: native cursor hover while Recipe Browser is open.
 		/// 4) placed Item Frame / Weapon Rack / Food Platter / placeables
 		/// Magic Storage item slots are owned by MS↔RB transfer when that path consumes the hotkey.
 		/// </summary>
@@ -579,7 +599,6 @@ namespace RecipeBrowserJPChatSearch
 			int hoverType = hoverSnap?.type
 				?? (Main.HoverItem.IsAir ? 0 : Main.HoverItem.type);
 			bool rbOpen = GetShowRecipeBrowser();
-			// NPC tip SetZoom is deferred until after UI/HoverItem paths fail (see below).
 			int npcType = 0;
 			int npcNetId = 0;
 			bool hasNpc = false;
@@ -633,12 +652,18 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 			}
 
+			// The transfer path owns the recipe result grid, including misses between its slots.
+			if (IsMouseOverRecipeResultGrid())
+				return false;
+
+			bool overRecipePanel = overRbPanel && IsMouseOverRecipeCataloguePanel();
+
 			// Inventory / equip / chest / bank / shop tracked by ItemSlot.MouseHover.
 			// Must run BEFORE overRb: when RB (or its tooltip region) overlaps inventory,
 			// ContainsPoint reports overRb=true and used to skip valid inv→RB clicks.
 			// MS formal transfer already ran in MiddleClickTransferPatch when it succeeded;
 			// this path only runs when that returned false.
-			if (slotHover && slotType > 0)
+			if (slotHover && slotType > 0 && (!overRecipePanel || !Patches.InventoryHoverTrackPatch.UsingStickyTrack))
 			{
 				if (!Main.playerInventory)
 				{
@@ -696,6 +721,10 @@ namespace RecipeBrowserJPChatSearch
 				return false;
 			}
 
+			// HoverItem can still hold a tooltip from a previous result after the pointer leaves its slot.
+			if (overRecipePanel)
+				return false;
+
 			if (overRbPanel && hoverSnap != null && Main.playerInventory)
 			{
 				// Panel overlaps inventory without a tracked slot / without RB item icon:
@@ -751,8 +780,7 @@ namespace RecipeBrowserJPChatSearch
 				return true;
 			}
 
-			// Policy A+B+enemy: world NPC only while RB is open.
-			// Tip SetZoom only here — after UI / HoverItem paths already failed.
+			// World NPC only while Recipe Browser is open and item routes did not handle the key.
 			if (rbOpen)
 			{
 				hasNpc = NpcHoverTrack.TryGetNpcWhileRecipeBrowserOpen(out npcType, out npcNetId);
@@ -766,12 +794,6 @@ namespace RecipeBrowserJPChatSearch
 				SearchHotkeyProbe.LogBlock("hover-ok", $"npc-rb-open type={npcType}");
 				HoverTooltipSuppress.Cancel("npc-bestiary");
 				return PerformNpcBestiarySearch(npcType, npcNetId);
-			}
-
-			if (!rbOpen && (Main.SmartInteractNPC >= 0 || (Main.LocalPlayer?.talkNPC ?? -1) >= 0))
-			{
-				RbjDiag.Info(
-					"Hover search-hotkey skipped: world NPC focus ignored while RB closed (policy A)");
 			}
 
 			// Placed tiles — never while a UI owns the mouse (RB query slot etc.)
@@ -1531,6 +1553,7 @@ namespace RecipeBrowserJPChatSearch
 					RbjDiag.Warn("PerformInvMsSyncedQuery: SetPanel(Recipe) failed — continuing");
 
 				HandleRecipeCatalogueQuery(itemType, allowToggleClose: false);
+				SynchronizeRecipeDetails(itemType);
 
 				Item probe = tipSnap;
 				if (probe == null)
@@ -1800,6 +1823,8 @@ namespace RecipeBrowserJPChatSearch
 				}
 
 				SetShowRecipeBrowser(recipeBrowserUi, showRecipeBrowser);
+				if (showRecipeBrowser && targetPanel == 0)
+					SynchronizeRecipeDetails(hoveredType);
 
 				int queryAfter = targetPanel switch
 				{
@@ -1853,6 +1878,52 @@ namespace RecipeBrowserJPChatSearch
 			finally
 			{
 				ResetPendingCursorQueryClear();
+			}
+		}
+
+		private static bool IsMouseOverRecipeCataloguePanel()
+			=> TryGetUiState(out object ui, out int panel) && panel == 0 && GetShowRecipeBrowser()
+				&& _mainPanelField?.GetValue(ui) is UIElement mainPanel
+				&& mainPanel.ContainsPoint(new(Main.mouseX, Main.mouseY));
+
+		internal static bool IsMouseOverRecipeResultGrid()
+		{
+			if (_recipeResultGridField == null || !TryGetUiState(out _, out int panel) || panel != 0
+				|| !TryGetRecipeBrowserPanelUnderMouse(out UIElement under))
+				return false;
+
+			object catalogue = _recipeCatalogueInstanceField?.GetValue(null);
+			if (catalogue == null || _recipeResultGridField.GetValue(catalogue) is not UIElement grid)
+				return false;
+
+			for (UIElement element = under; element != null; element = element.Parent)
+				if (ReferenceEquals(element, grid))
+					return true;
+			return grid.ContainsPoint(new(Main.mouseX, Main.mouseY));
+		}
+
+		internal static bool IsCurrentRecipeQueryItem(Item item)
+			=> IsSameItemKind(TryGetRecipeCatalogueQueryItem(), item, item.type);
+
+		private static void SynchronizeRecipeDetails(int itemType)
+		{
+			if (_recipeDetails == null)
+				return;
+
+			try
+			{
+				if (!GetShowRecipeBrowser() || !TryGetUiState(out _, out int panel) || panel != 0
+					|| TryGetRecipeCatalogueQueryItem()?.type != itemType)
+					return;
+
+				object catalogue = _recipeCatalogueInstanceField.GetValue(null);
+				_recipeDetails.Synchronize(catalogue, itemType, Main.recipe);
+			}
+			catch (Exception ex)
+			{
+				// If Recipe Browser changes its internals, leave its normal query usable.
+				_recipeDetails = null;
+				RbjDiag.Warn($"Recipe catalogue detail synchronization unavailable: {ex.GetBaseException().Message}");
 			}
 		}
 

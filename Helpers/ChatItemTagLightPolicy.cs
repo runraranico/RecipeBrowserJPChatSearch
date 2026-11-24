@@ -3,7 +3,7 @@ using Terraria;
 namespace RecipeBrowserJPChatSearch
 {
 	/// <summary>
-	/// Gates chat compose helpers (short tags / parse-cache passthrough).
+	/// Gates chat compose helpers.
 	/// UniqueDraw stays vanilla/RB framed — no light-draw path.
 	/// </summary>
 	internal static class ChatItemTagLightPolicy

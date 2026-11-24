@@ -14,6 +14,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 		private static readonly Dictionary<Type, FieldInfo> _skipHistoryCache = new();
 
+		internal static void Unload() => _skipHistoryCache.Clear();
+
 		public static void Apply(Mod recipeBrowserMod)
 		{
 			HookReplaceWithFake(recipeBrowserMod.Code.GetType("RecipeBrowser.UIElements.UIQueryItemSlot"));
@@ -39,7 +41,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 			{
 				orig(self, type);
 
-				if (type <= 0 || IsHistoryNavigation(self))
+				if (type <= 0 || !RecipeBrowserCursorSearchBridge.HasPendingCursorQueryClear || IsHistoryNavigation(self))
 					return;
 
 				if (RecipeBrowserCursorSearchBridge.ConsumePendingCursorQueryClear())

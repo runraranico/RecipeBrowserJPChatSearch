@@ -244,6 +244,13 @@ namespace RecipeBrowserJPChatSearch
 			ClearPending();
 		}
 
+		internal static bool HasReachableCraftingAccess()
+		{
+			Player player = Main.LocalPlayer;
+			return player != null && player.active
+				&& TryFindNearestReachableCraftingAccess(player, out _, out _);
+		}
+
 		private static bool TryFindNearestReachableCraftingAccess(
 			Player player,
 			out Point16 selected,

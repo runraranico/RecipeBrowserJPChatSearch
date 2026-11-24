@@ -13,8 +13,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 	{
 		private delegate void orig_OnHover(object self);
 
-		private static FieldInfo _itemField;
-
 		internal static bool OnHoverHooked { get; private set; }
 
 		public static void Apply(Mod recipeBrowserMod)
@@ -29,8 +27,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 			MethodInfo onHover = snippetType.GetMethod("OnHover", BindingFlags.Instance | BindingFlags.Public);
-			_itemField = snippetType.GetField("_item", instance);
-			if (onHover == null || _itemField == null)
+			FieldInfo itemField = snippetType.GetField("_item", instance);
+			if (onHover == null || itemField == null)
 			{
 				RbjDiag.Warn("ItemHoverFixTagHandlerPatch: OnHover/_item missing");
 				return;
@@ -38,7 +36,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			MonoModHooks.Add(onHover, (orig_OnHover orig, object self) =>
 			{
-				if (_itemField.GetValue(self) is Item item && !item.IsAir)
+				if (itemField.GetValue(self) is Item item && !item.IsAir)
 				{
 					RecipeBrowserCursorSearchBridge.RememberHoveredItem(item.type);
 					if (ChatSnippetSearchPatch.Capturing)
@@ -53,7 +51,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 				if (ChatItemTagLightPolicy.IsComposingChat)
 					return;
 
-				if (_itemField.GetValue(self) is not Item again || again.IsAir)
+				if (itemField.GetValue(self) is not Item again || again.IsAir)
 					return;
 
 				if (Main.HoverItem.IsAir)

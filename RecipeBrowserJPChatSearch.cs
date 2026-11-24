@@ -21,7 +21,6 @@ namespace RecipeBrowserJPChatSearch
 
 			VanillaItemTagHandlerPatch.Apply();
 			ChatComposeTagShortener.Apply();
-			ChatParseMessageCache.Apply();
 
 			ModLoader.TryGetMod("SerousCommonLib", out Mod serous);
 			if (serous != null)
@@ -58,7 +57,7 @@ namespace RecipeBrowserJPChatSearch
 				$"Load complete v={Version} verbose={RbjDiag.Enabled} " +
 				$"onHover vanilla={VanillaItemTagHandlerPatch.OnHoverHooked} " +
 				$"rb={ItemHoverFixTagHandlerPatch.OnHoverHooked} UniqueDraw=not-hooked " +
-				$"compose=short-tags parse-cache=DISABLED");
+				$"compose=short-tags");
 		}
 
 		public override void PostSetupContent()
@@ -80,7 +79,13 @@ namespace RecipeBrowserJPChatSearch
 			MagicStorageCraftingAccessHelper.Unload();
 			WorldPlacedItemHover.ClearReflectionCache();
 			SerousCommonLibPatches.Unload();
+			RecipeBrowserCursorQueryClearPatch.Unload();
+			RecipeBrowserNameSearchHelper.Unload();
 			RecipeBrowserCursorSearchBridge.Unload();
+			HoverTooltipSuppress.Cancel("mod unload");
+			if (RecipeBrowserInputHelper.ActiveRecipeBrowserTextBox != null)
+				RecipeBrowserInputHelper.ReleaseInputLocks();
+			RecipeBrowserPatches.Unload();
 			ModKeybinds.Unload();
 		}
 	}

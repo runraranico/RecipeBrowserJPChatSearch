@@ -33,6 +33,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 		public static void Apply(Mod magicStorageMod, Mod recipeBrowserMod)
 		{
 			RequiredObjectSearch.Initialize(recipeBrowserMod);
+			MagicStorageRequiredObjectSearch.Initialize(magicStorageMod);
 			if (magicStorageMod != null)
 			{
 				_msSlotType = magicStorageMod.Code.GetType("MagicStorage.UI.MagicStorageItemSlot");
@@ -67,6 +68,7 @@ namespace RecipeBrowserJPChatSearch.Patches
 		internal static void Unload()
 		{
 			RequiredObjectSearch.Unload();
+			MagicStorageRequiredObjectSearch.Initialize(null);
 			_msSlotType = null;
 			_msStoredItemProperty = null;
 			_rbItemSlotType = null;
@@ -134,7 +136,8 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (!overRbItem && RequiredObjectSearch.TryHandleHoveredRequiredObject())
 				return true;
 
-			if (overRbItem && TryHandleRecipeBrowserHover(hoverSnap, out string rbHow, out Item rbItem))
+			if ((overRbItem || (overRb && RecipeBrowserCursorSearchBridge.IsMouseOverRecipeResultGrid()))
+				&& TryHandleRecipeBrowserHover(hoverSnap, out string rbHow, out Item rbItem))
 			{
 				if (rbItem != null && !rbItem.IsAir)
 				{
@@ -143,11 +146,14 @@ namespace RecipeBrowserJPChatSearch.Patches
 				}
 				else
 				{
-					SearchHotkeyProbe.LogBlock("transfer-ok", $"RB→MS consumed-no-search how={rbHow}");
+					SearchHotkeyProbe.LogBlock("transfer-ok", $"RB icon handled how={rbHow}");
 				}
 
 				return true;
 			}
+
+			if (!overRb && !overMs && MagicStorageRequiredObjectSearch.TryHandleCraftingRequiredObject())
+				return true;
 
 			if (TryHandleMagicStorageHover(hoverSnap, out string msHow, out Item msItem))
 			{
@@ -211,12 +217,36 @@ namespace RecipeBrowserJPChatSearch.Patches
 				$"preferredRecipe={(preferredRecipe != null)} " +
 				$"CurrentUi={MagicStorageCraftingAccessHelper.UiKindLabel(uiKind)}");
 
+			bool sameRecipeResult = preferredRecipe != null
+				&& RecipeBrowserCursorSearchBridge.IsMouseOverRecipeResultGrid()
+				&& RecipeBrowserCursorSearchBridge.IsCurrentRecipeQueryItem(item);
+			if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB item search"))
+				return false;
+
+			bool closeBeforeTransfer = sameRecipeResult && uiKind == MagicStorageUiKind.Crafting
+				&& (MagicStorageSearchHelper.HasMatchingCraftingSearch(itemName)
+					|| !MagicStorageCraftingAccessHelper.HasReachableCraftingAccess());
+			if (!closeBeforeTransfer)
+			{
+				bool handled = TryTransferRecipeBrowserItem(item, preferredRecipe, uiKind, ref how, out transferred);
+				bool noDestination = uiKind == MagicStorageUiKind.None && transferred == null && how != "open-failed";
+				if (!sameRecipeResult || !noDestination)
+					return handled;
+			}
+
+			RecipeBrowserCursorSearchBridge.CloseRecipeBrowserLikeCloseButton();
+			SoundEngine.PlaySound(SoundID.MenuClose);
+			how = "recipe-result:close";
+			return true;
+		}
+
+		private static bool TryTransferRecipeBrowserItem(
+			Item item, Recipe preferredRecipe, MagicStorageUiKind uiKind, ref string how, out Item transferred)
+		{
+			transferred = null;
 			if (uiKind == MagicStorageUiKind.Storage)
 			{
 				RbjDiag.Info("Action=SetStorageSearch");
-				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:Storage"))
-					return false;
-
 				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
 				{
 					RbjDiag.Info("SetSearchSuccess=false reason=storage-search-fail");
@@ -233,9 +263,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 			if (uiKind == MagicStorageUiKind.Crafting)
 			{
 				RbjDiag.Info("Action=SetCraftingSearch+SelectRecipe");
-				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:Crafting"))
-					return false;
-
 				if (!MagicStorageSearchHelper.TrySetSearchFromItemAndSelectCraftRecipe(item, preferredRecipe))
 				{
 					RbjDiag.Info("SetSearchSuccess=false reason=crafting-search-fail");
@@ -251,8 +278,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 
 			if (uiKind != MagicStorageUiKind.None)
 			{
-				if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:OtherUI"))
-					return false;
 				MagicStorageSearchHelper.CancelPendingCraftSearches();
 				if (!MagicStorageSearchHelper.TrySetSearchFromItem(item))
 					return false;
@@ -262,9 +287,6 @@ namespace RecipeBrowserJPChatSearch.Patches
 			}
 			// No MS UI open → Crafting Access only (never auto-open Heart / Storage Access / Remote).
 			RbjDiag.Info("Action=OpenNearestCraftingAccessThenSearch");
-			if (!RecipeBrowserCursorSearchBridge.TryConsumeSearchActionThisFrame("RB→MS:OpenCraft"))
-				return false;
-
 			if (!MagicStorageCraftingAccessHelper.TryOpenNearestCraftingAccessAndSetSearch(
 					item, preferredRecipe, out string failReason))
 			{

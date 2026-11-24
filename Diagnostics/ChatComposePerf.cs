@@ -120,8 +120,7 @@ namespace RecipeBrowserJPChatSearch
 			sb.Append($"frames={_framesInWindow} chatLen={len} ");
 			sb.Append($"tags[i:/={tagISlash} i:={tagI} item:={tagItem} itemhover={tagItemhover}] ");
 			sb.Append($"hoverV={_hoverVanillaFull} hoverRb={_hoverRbFull} ");
-			sb.Append($"postDrawAvgUs={avgPostUs} ");
-			sb.Append(ChatParseMessageCache.SnapshotStats());
+			sb.Append($"postDrawAvgUs={avgPostUs}");
 			RbjDiag.Info(sb.ToString());
 		}
 

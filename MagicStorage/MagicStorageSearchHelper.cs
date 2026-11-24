@@ -33,6 +33,7 @@ namespace RecipeBrowserJPChatSearch
 		private static MethodInfo _getDefaultPage;
 		private static FieldInfo _searchBarField;
 		private static PropertyInfo _stateProperty;
+		private static PropertyInfo _stateInputText;
 		private static MethodInfo _stateSet;
 		private static MethodInfo _stateActivate;
 		private static MethodInfo _stateReset;
@@ -101,6 +102,34 @@ namespace RecipeBrowserJPChatSearch
 
 			return true;
 		}
+
+		internal static bool HasMatchingCraftingSearch(string name)
+		{
+			if (string.IsNullOrWhiteSpace(name) || !IsCraftingUiOpen() || _stateInputText == null)
+				return false;
+
+			try
+			{
+				if (!TryGetUiRoot(out UIElement root) || _getDefaultPage.DeclaringType?.IsInstanceOfType(root) != true)
+					return false;
+				object page = _getDefaultPage.Invoke(root, null);
+				if (_searchBarField.DeclaringType?.IsInstanceOfType(page) != true)
+					return false;
+				object bar = _searchBarField.GetValue(page);
+				object state = bar == null ? null : _stateProperty.GetValue(bar);
+				return MatchesCraftingSearchState(_stateInputText, state, name);
+			}
+			catch
+			{
+				// Search text is optional on versions with a different UI layout.
+				return false;
+			}
+		}
+
+		private static bool MatchesCraftingSearchState(PropertyInfo inputText, object state, string name)
+			=> inputText.DeclaringType?.IsInstanceOfType(state) == true
+				&& inputText.GetValue(state) is string current
+				&& string.Equals(current.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase);
 
 		internal static bool TrySetSearch(string name)
 		{
@@ -1372,6 +1401,7 @@ namespace RecipeBrowserJPChatSearch
 				if (ModLoader.TryGetMod("SerousCommonLib", out Mod serous))
 					stateType = serous.Code.GetType("SerousCommonLib.API.Input.TextInputState");
 				_stateSet = stateType?.GetMethod("Set", BindingFlags.Instance | BindingFlags.Public, null, new[] { typeof(string) }, null);
+				_stateInputText = stateType?.GetProperty("InputText", BindingFlags.Instance | BindingFlags.Public);
 				_stateActivate = stateType?.GetMethod("Activate", BindingFlags.Instance | BindingFlags.Public);
 				// Optional: used by craft-reset clear for focus-safe wipe (Set/Reset need IsActive).
 				_stateReset = stateType?.GetMethod("Reset", BindingFlags.Instance | BindingFlags.Public, null, new[] { typeof(bool) }, null);
@@ -1426,6 +1456,7 @@ namespace RecipeBrowserJPChatSearch
 			_getDefaultPage = null;
 			_searchBarField = null;
 			_stateProperty = null;
+			_stateInputText = null;
 			_stateSet = null;
 			_stateActivate = null;
 			_stateReset = null;

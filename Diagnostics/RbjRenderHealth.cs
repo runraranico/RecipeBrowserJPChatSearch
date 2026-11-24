@@ -104,12 +104,11 @@ namespace RecipeBrowserJPChatSearch
 		internal static void OnChatClosed()
 		{
 			Mark("chat-closed");
-			RbjDiag.Info("RbjRenderHealth chat-closed → parse-cache invalidate");
 		}
 
 		/// <summary>
 		/// PostDraw 終了時。公開ビルド（<see cref="RbjDiag.Enabled"/> = false）では
-		/// 機能必須だけ（チャット閉鎖キャッシュ無効化・ズーム深度リセット・マウス復元）。
+		/// 機能必須だけ（ズーム深度リセット・マウス復元）。
 		/// Snapshot / trail / pulse / suspect は verbose 時のみ。
 		/// </summary>
 		internal static void TickAfterPostDraw(string path, RbjCursor.MouseSnap? mouseAtEntry = null)

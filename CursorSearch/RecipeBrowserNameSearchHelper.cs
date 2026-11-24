@@ -10,6 +10,8 @@ namespace RecipeBrowserJPChatSearch
 	internal static class RecipeBrowserNameSearchHelper
 	{
 		private static FieldInfo _itemUpdateNeededField;
+
+		internal static void Unload() => _itemUpdateNeededField = null;
 		private static bool _fieldsCached;
 
 		/// <summary>
